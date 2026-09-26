@@ -198,6 +198,7 @@ def compact(row: dict, external_observations: list[dict] | None = None) -> dict:
         "web": {**meta(website), "value": website_value},
         "liveStatus": live.get("status", "not_run"),
         "changes": row.get("change_history") or [],
+        "summary": row.get("summary") or {},
         "external": external,
     }
 
