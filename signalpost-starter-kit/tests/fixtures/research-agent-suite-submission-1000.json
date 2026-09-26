@@ -1,0 +1,24 @@
+{
+  "corpus": "frozen submission-1000 research-agent suite v1",
+  "single_company": {
+    "organisation_number": "990918546",
+    "question": "Who leads this company and what financial facts and locations are available?",
+    "minimum_facts": 6
+  },
+  "screens": [
+    {
+      "query": "companies in Oslo with more than 5 employees and revenue over 1 million top 10 by revenue",
+      "expected_organisation_numbers": ["990918546", "982683955", "940729092", "936656013", "966703687", "957492258", "999296432", "976695372", "928038440", "923166629"],
+      "expected_filter_fields": ["municipality", "employees", "revenue"]
+    },
+    {
+      "query": "top 5 by revenue",
+      "expected_organisation_numbers": ["966833300", "980335216", "995754606", "990918546", "910608193"],
+      "expected_filter_fields": []
+    }
+  ],
+  "unsupported": {
+    "query": "companies in Oslo with positive Glassdoor sentiment",
+    "must_abstain": true
+  }
+}

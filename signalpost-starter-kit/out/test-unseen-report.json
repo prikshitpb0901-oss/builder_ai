@@ -1,0 +1,42 @@
+{
+  "run_id": "unseen-test-1",
+  "started_at": "2026-09-26T06:07:22.762674Z",
+  "completed_at": "2026-09-26T06:07:40.685983Z",
+  "expected_count": 10,
+  "emitted_envelopes": 10,
+  "resumed_profiles": 0,
+  "profiles_fetched_this_run": 10,
+  "modules": [
+    "registry",
+    "accounting_obligation",
+    "registry_live",
+    "financials",
+    "roles",
+    "group",
+    "locations",
+    "website"
+  ],
+  "registry": {
+    "registry_snapshot_sha256": "1c89710e5b01f8617e86d09fbdff4a52f2f8dbbba297e74f7164b5984f5a0384",
+    "registry_rows_scanned": 368389,
+    "requested": 10,
+    "selected": 10
+  },
+  "operations": {
+    "requests": 50,
+    "bytes": 63069,
+    "p50_ms": 1323,
+    "p95_ms": 1891
+  },
+  "validation": {
+    "passed": true,
+    "checks": {
+      "exact_expected_count": true,
+      "unique_organisation_numbers": true,
+      "all_entity_states_terminal": true,
+      "all_module_states_terminal": true,
+      "zero_silent_drops": true
+    },
+    "invalid_states": []
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "base_suite": "tests/fixtures/research-agent-suite-v3-fresh.json",
+  "corpus": "fresh post-lock 40-question Signalpost extension research suite v3",
+  "qa_cases": [
+    {"id":"fq01","organisation_number":"993558354","question":"Report the annual accounts, registered leaders, and operating location evidence.","minimum_facts":8,"required_claims":["Reporting period","Registered subunit"]},
+    {"id":"fq02","organisation_number":"828646842","question":"What revenue, assets, leadership roles, and registered locations can you support?","minimum_facts":8,"required_claims":["Revenue","Assets","Registered subunit"]},
+    {"id":"fq03","organisation_number":"882718662","question":"List supported financial results, leaders, and physical subunits.","minimum_facts":8,"required_claims":["Reporting period","Registered subunit"]},
+    {"id":"fq04","organisation_number":"912843874","question":"Give cited account figures together with leadership and location records.","minimum_facts":8,"required_claims":["Reporting period","Registered subunit"]},
+    {"id":"fq05","organisation_number":"922020329","question":"What do the account, role, and location sources establish?","minimum_facts":8,"required_claims":["Reporting period","Registered subunit"]},
+    {"id":"fq06","organisation_number":"935428610","question":"Show official results, active roles, and registered subunits.","minimum_facts":8,"required_claims":["Annual result","Registered subunit"]},
+    {"id":"fq07","organisation_number":"939318453","question":"Support a financial and leadership summary with location evidence.","minimum_facts":8,"required_claims":["Assets","Registered subunit"]},
+    {"id":"fq08","organisation_number":"974389908","question":"Which financial facts, leaders, and locations are source-backed?","minimum_facts":8,"required_claims":["Reporting period","Registered subunit"]}
+  ]
+}

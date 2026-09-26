@@ -1,0 +1,49 @@
+{
+  "corpus": "fresh post-lock 40-question Signalpost research suite v3",
+  "qa_cases": [
+    {"id":"fq01","organisation_number":"976605713","question":"Report the annual accounts, registered leaders, and operating location evidence.","minimum_facts":9,"required_claims":["Reporting period","Registered subunit"]},
+    {"id":"fq02","organisation_number":"976695372","question":"What revenue, assets, leadership roles, and registered locations can you support?","minimum_facts":9,"required_claims":["Revenue","Assets","Registered subunit"]},
+    {"id":"fq03","organisation_number":"990918546","question":"List supported financial results, leaders, and physical subunits.","minimum_facts":9,"required_claims":["Annual result","Registered subunit"]},
+    {"id":"fq04","organisation_number":"928038440","question":"Give cited account figures together with leadership and location records.","minimum_facts":9,"required_claims":["Reporting period","Debt","Registered subunit"]},
+    {"id":"fq05","organisation_number":"924420634","question":"What do the account, role, and location sources establish?","minimum_facts":9,"required_claims":["Reporting period","Registered subunit"]},
+    {"id":"fq06","organisation_number":"913155726","question":"Show official results, active roles, and registered subunits.","minimum_facts":9,"required_claims":["Annual result","Registered subunit"]},
+    {"id":"fq07","organisation_number":"916950381","question":"Support a financial and leadership summary with location evidence.","minimum_facts":9,"required_claims":["Assets","Registered subunit"]},
+    {"id":"fq08","organisation_number":"991123709","question":"Which financial facts, leaders, and locations are source-backed?","minimum_facts":9,"required_claims":["Reporting period","Registered subunit"]}
+  ],
+  "screen_cases": [
+    {"id":"fs01","query":"companies in Oslo with above 7 employees","oracle":{"filters":[{"field":"municipality","operator":"eq","value":"OSLO"},{"field":"employees","operator":">","value":7}]}},
+    {"id":"fs02","query":"companies in Bergen with over 4 registered employees","oracle":{"filters":[{"field":"municipality","operator":"eq","value":"BERGEN"},{"field":"employees","operator":">","value":4}]}},
+    {"id":"fs03","query":"companies in Trondheim with employees > 10","oracle":{"filters":[{"field":"municipality","operator":"eq","value":"TRONDHEIM"},{"field":"employees","operator":">","value":10}]}},
+    {"id":"fs04","query":"legal form = STI","oracle":{"filters":[{"field":"legal_form","operator":"eq","value":"STI"}]}},
+    {"id":"fs05","query":"organisation form is BRL","oracle":{"filters":[{"field":"legal_form","operator":"eq","value":"BRL"}]}},
+    {"id":"fs06","query":"companies with at least 75 employees","oracle":{"filters":[{"field":"employees","operator":">=","value":75}]}},
+    {"id":"fs07","query":"companies with fewer than 100 employees","oracle":{"filters":[{"field":"employees","operator":"<","value":100}]}},
+    {"id":"fs08","query":"companies with revenue above 25 million","oracle":{"filters":[{"field":"revenue","operator":">","value":25000000}]}},
+    {"id":"fs09","query":"companies with revenue >= NOK 250 million","oracle":{"filters":[{"field":"revenue","operator":">=","value":250000000}]}},
+    {"id":"fs10","query":"companies with less than 2 million revenue","oracle":{"filters":[{"field":"revenue","operator":"<","value":2000000}]}},
+    {"id":"fs11","query":"companies with positive annual result","oracle":{"filters":[{"field":"annual_result","operator":">","value":0}]}},
+    {"id":"fs12","query":"companies with negative annual result","oracle":{"filters":[{"field":"annual_result","operator":"<","value":0}]}},
+    {"id":"fs13","query":"companies that have an official website","oracle":{"filters":[{"field":"website","operator":"present","value":true}]}},
+    {"id":"fs14","query":"companies that have accounts","oracle":{"filters":[{"field":"financials","operator":"available","value":true}]}},
+    {"id":"fs15","query":"industry contains 'restauranter'","oracle":{"filters":[{"field":"industry","operator":"contains","value":"restauranter"}]}},
+    {"id":"fs16","query":"industry is 'bygninger'","oracle":{"filters":[{"field":"industry","operator":"contains","value":"bygninger"}]}},
+    {"id":"fs17","query":"top 7 by revenue","oracle":{"filters":[],"sort":{"field":"revenue","direction":"desc","limit":7}}},
+    {"id":"fs18","query":"top 12 by employees","oracle":{"filters":[],"sort":{"field":"employees","direction":"desc","limit":12}}},
+    {"id":"fs19","query":"companies in Oslo with at least 20 employees top 8 by employees","oracle":{"filters":[{"field":"municipality","operator":"eq","value":"OSLO"},{"field":"employees","operator":">=","value":20}],"sort":{"field":"employees","direction":"desc","limit":8}}},
+    {"id":"fs20","query":"companies in Bergen with revenue above 5 million top 6 by revenue","oracle":{"filters":[{"field":"municipality","operator":"eq","value":"BERGEN"},{"field":"revenue","operator":">","value":5000000}],"sort":{"field":"revenue","direction":"desc","limit":6}}},
+    {"id":"fs21","query":"organisation form AS with accounts top 9 by revenue","oracle":{"filters":[{"field":"legal_form","operator":"eq","value":"AS"},{"field":"financials","operator":"available","value":true}],"sort":{"field":"revenue","direction":"desc","limit":9}}},
+    {"id":"fs22","query":"positive annual result top 6 by revenue","oracle":{"filters":[{"field":"annual_result","operator":">","value":0}],"sort":{"field":"revenue","direction":"desc","limit":6}}},
+    {"id":"fs23","query":"negative annual result top 6 by revenue","oracle":{"filters":[{"field":"annual_result","operator":"<","value":0}],"sort":{"field":"revenue","direction":"desc","limit":6}}},
+    {"id":"fs24","query":"legal form ASA with above 20 employees top 5 by employees","oracle":{"filters":[{"field":"legal_form","operator":"eq","value":"ASA"},{"field":"employees","operator":">","value":20}],"sort":{"field":"employees","direction":"desc","limit":5}}}
+  ],
+  "unsupported_cases": [
+    {"id":"fu01","query":"rank companies by LinkedIn hiring velocity"},
+    {"id":"fu02","query":"find the highest Glassdoor culture scores"},
+    {"id":"fu03","query":"show companies whose web traffic doubled"},
+    {"id":"fu04","query":"rank firms by review popularity"},
+    {"id":"fu05","query":"find negative social sentiment"},
+    {"id":"fu06","query":"show companies with the loudest buzz"},
+    {"id":"fu07","query":"find firms with no website"},
+    {"id":"fu08","query":"which businesses are probably fraudulent"}
+  ]
+}

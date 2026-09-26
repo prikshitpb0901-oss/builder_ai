@@ -1,0 +1,36 @@
+{
+  "connector": "google_news_rss_exact_title_experiment_v1",
+  "companies": 5,
+  "companies_with_mentions": 0,
+  "observations": 0,
+  "lookback_years": 2,
+  "errors": 0,
+  "claim_boundary": "Discovery-only experimental titles from Google News RSS. Publisher article bodies and storage rights are not independently verified, so these cannot be published or earn strict points.",
+  "company_results": [
+    {
+      "organisation_number": "985589003",
+      "items": 0,
+      "accepted": 0
+    },
+    {
+      "organisation_number": "935095190",
+      "items": 0,
+      "accepted": 0
+    },
+    {
+      "organisation_number": "997830792",
+      "items": 0,
+      "accepted": 0
+    },
+    {
+      "organisation_number": "916340257",
+      "items": 0,
+      "accepted": 0
+    },
+    {
+      "organisation_number": "998487099",
+      "items": 0,
+      "accepted": 0
+    }
+  ]
+}

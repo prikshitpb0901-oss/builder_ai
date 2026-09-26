@@ -1,0 +1,16 @@
+{
+  "base_suite": "tests/fixtures/research-agent-suite-v2.json",
+  "corpus": "frozen 50-question Signalpost extension research suite v2",
+  "qa_cases": [
+    {"id":"qa01","organisation_number":"916437110","question":"Who leads this company and what financial facts and locations are available?","minimum_facts":10,"required_claims":["Reporting period","Revenue","Registered subunit"]},
+    {"id":"qa02","organisation_number":"971263881","question":"Give me the financial record and registered leadership and locations.","minimum_facts":10,"required_claims":["Revenue","Annual result","Registered subunit"]},
+    {"id":"qa03","organisation_number":"919097744","question":"Who leads it, where does it operate, and what revenue is reported?","minimum_facts":10,"required_claims":["Revenue","Registered subunit"]},
+    {"id":"qa04","organisation_number":"916201796","question":"Summarize financials, leaders and locations.","minimum_facts":10,"required_claims":["Revenue","Operating result","Registered subunit"]},
+    {"id":"qa05","organisation_number":"993060453","question":"What financial facts, leadership and locations are available?","minimum_facts":10,"required_claims":["Reporting period","Debt","Registered subunit"]},
+    {"id":"qa06","organisation_number":"917338310","question":"Show revenue, annual result, leaders and locations.","minimum_facts":10,"required_claims":["Revenue","Annual result","Registered subunit"]},
+    {"id":"qa07","organisation_number":"916809158","question":"Who leads this company and where is it located? Include financials.","minimum_facts":10,"required_claims":["Revenue","Assets","Registered subunit"]},
+    {"id":"qa08","organisation_number":"919331747","question":"Give me leadership, registered locations and the annual-account summary.","minimum_facts":10,"required_claims":["Reporting period","Revenue","Registered subunit"]},
+    {"id":"qa09","organisation_number":"928084825","question":"What do the official financial, role and location records say?","minimum_facts":10,"required_claims":["Revenue","Debt","Registered subunit"]},
+    {"id":"qa10","organisation_number":"918859144","question":"Summarize leaders, financial performance and locations.","minimum_facts":10,"required_claims":["Revenue","Operating result","Registered subunit"]}
+  ]
+}

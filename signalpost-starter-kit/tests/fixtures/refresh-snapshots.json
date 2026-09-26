@@ -1,0 +1,48 @@
+{
+  "corpus": "evaluator-owned deterministic old/new source snapshot fixture",
+  "modules": ["registry_live", "financials"],
+  "profiles": [
+    {
+      "organisation_number": "923609016",
+      "name": "Example AS",
+      "legal_form": "AS",
+      "employees": 2,
+      "website": "example.no",
+      "evidence": {}
+    }
+  ],
+  "expected_changes": [
+    {"organisation_number": "923609016", "field": "registry.employees"},
+    {"organisation_number": "923609016", "field": "financials.records"}
+  ],
+  "snapshots": {
+    "old": {
+      "retrieved_at": "2026-08-01T00:00:00Z",
+      "effective_at": "2026-07-31T23:59:59Z",
+      "responses": {
+        "https://data.brreg.no/enhetsregisteret/api/enheter/923609016": {
+          "status": 200,
+          "body": {"organisasjonsnummer": "923609016", "navn": "Example AS", "organisasjonsform": {"kode": "AS"}, "antallAnsatte": 2, "hjemmeside": "example.no", "sisteInnsendteAarsregnskap": "2024"}
+        },
+        "https://data.brreg.no/regnskapsregisteret/regnskap/923609016": {
+          "status": 200,
+          "body": [{"id": 1, "regnskapstype": "SELSKAP", "valuta": "NOK", "regnskapsperiode": {"fraDato": "2024-01-01", "tilDato": "2024-12-31"}, "resultatregnskapResultat": {"driftsresultat": {"driftsinntekter": {"sumDriftsinntekter": 100}, "driftsresultat": 10}, "aarsresultat": 8}, "eiendeler": {"sumEiendeler": 80}, "egenkapitalGjeld": {"egenkapital": {"sumEgenkapital": 30}, "gjeldOversikt": {"sumGjeld": 50}}}]
+        }
+      }
+    },
+    "new": {
+      "retrieved_at": "2026-08-02T00:00:00Z",
+      "effective_at": "2026-08-01T23:59:59Z",
+      "responses": {
+        "https://data.brreg.no/enhetsregisteret/api/enheter/923609016": {
+          "status": 200,
+          "body": {"organisasjonsnummer": "923609016", "navn": "Example AS", "organisasjonsform": {"kode": "AS"}, "antallAnsatte": 3, "hjemmeside": "example.no", "sisteInnsendteAarsregnskap": "2024"}
+        },
+        "https://data.brreg.no/regnskapsregisteret/regnskap/923609016": {
+          "status": 200,
+          "body": [{"id": 1, "regnskapstype": "SELSKAP", "valuta": "NOK", "regnskapsperiode": {"fraDato": "2024-01-01", "tilDato": "2024-12-31"}, "resultatregnskapResultat": {"driftsresultat": {"driftsinntekter": {"sumDriftsinntekter": 120}, "driftsresultat": 12}, "aarsresultat": 9}, "eiendeler": {"sumEiendeler": 90}, "egenkapitalGjeld": {"egenkapital": {"sumEgenkapital": 35}, "gjeldOversikt": {"sumGjeld": 55}}}]
+        }
+      }
+    }
+  }
+}

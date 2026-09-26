@@ -1,0 +1,24 @@
+{
+  "corpus": "frozen extension-250 research-agent suite v1",
+  "single_company": {
+    "organisation_number": "939318453",
+    "question": "Who leads this company and what financial facts and locations are available?",
+    "minimum_facts": 6
+  },
+  "screens": [
+    {
+      "query": "companies in Oslo with more than 5 employees and revenue over 1 million top 10 by revenue",
+      "expected_organisation_numbers": ["939318453", "916201796", "928230937"],
+      "expected_filter_fields": ["municipality", "employees", "revenue"]
+    },
+    {
+      "query": "top 5 by revenue",
+      "expected_organisation_numbers": ["939318453", "928084825", "916201796", "882718662", "916437110"],
+      "expected_filter_fields": []
+    }
+  ],
+  "unsupported": {
+    "query": "companies in Oslo with positive Glassdoor sentiment",
+    "must_abstain": true
+  }
+}
