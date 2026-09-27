@@ -26,6 +26,7 @@ from norway_company_agent.website import fetch_website  # noqa: E402
 
 
 from norway_company_agent.news_credibility import evaluate_news_credibility  # noqa: E402
+from norway_company_agent.external_connectors import discover_linkedin_company, discover_youtube_channel  # noqa: E402
 
 NEWS_UA = "SignalpostResearchPOC/1.0 (https://builderr.ai; bounded qualification run)"
 
@@ -157,14 +158,31 @@ def main() -> None:
         if "website" in requested_modules:
             website_record, website_metrics = fetch_website(profile.get("website"))
             profile["evidence"]["website"] = apply_website_identity_gate(profile, website_record)["website"]
-        # Google News RSS enrichment (free, no API key)
+        # Google News RSS enrichment (free, no API key, 5-layer fake news defense)
         news_mentions = _fetch_google_news(profile, limit=5)
-        news_request_count = 1  # one RSS request per company
         if news_mentions:
             profile["news_mentions"] = news_mentions
+
+        # External Footprint Connectors (LinkedIn & YouTube)
+        website_val = (profile.get("evidence", {}).get("website", {}) or {}).get("value") or {}
+        website_domain = website_val.get("registered_domain")
+
+        external_footprint = {}
+        linkedin_match = discover_linkedin_company(profile["name"], profile["organisation_number"])
+        if linkedin_match:
+            external_footprint["linkedin"] = linkedin_match
+
+        youtube_match = discover_youtube_channel(profile["name"], profile["organisation_number"], website_domain)
+        if youtube_match:
+            external_footprint["youtube"] = youtube_match
+
+        if external_footprint:
+            profile["external_footprint"] = external_footprint
+
         profile["summary"] = synthesize_company_profile(profile)
+        external_requests = 3  # 1 news RSS + 1 linkedin typeahead + 1 youtube search
         metric = {
-            "requests": len(metrics) + website_metrics["requests"] + news_request_count,
+            "requests": len(metrics) + website_metrics["requests"] + external_requests,
             "bytes": sum(item.bytes_received for item in metrics) + website_metrics["bytes"],
             "latencies_ms": [item.elapsed_ms for item in metrics] + website_metrics["latencies_ms"],
         }

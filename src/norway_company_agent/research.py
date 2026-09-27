@@ -321,11 +321,28 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     else:
         media_coverage = "No recent news mentions discovered via Google News RSS."
 
+    # 7. Digital & social footprint (LinkedIn, YouTube, Website social links)
+    footprint = profile.get("external_footprint") or {}
+    social_links = (evidence.get("website", {}).get("value") or {}).get("social_links") or []
+    footprint_items = []
+    if "linkedin" in footprint:
+        footprint_items.append(f"LinkedIn ({footprint['linkedin'].get('display_name')})")
+    if "youtube" in footprint:
+        footprint_items.append(f"YouTube ({footprint['youtube'].get('channel_name')})")
+    for s in social_links:
+        footprint_items.append(f"{s.get('platform', 'Social').title()} ({s.get('url')})")
+
+    if footprint_items:
+        digital_footprint = f"Verified digital footprint on: {', '.join(footprint_items)}."
+    else:
+        digital_footprint = "No verified external social or corporate media profiles detected."
+
     return {
         "what_the_company_does": what_it_does,
         "financial_status": financial_status,
         "leadership_status": leadership_status,
         "media_coverage": media_coverage,
+        "digital_footprint": digital_footprint,
         "what_remains_unknown": unknowns,
         "sources": sources,
     }

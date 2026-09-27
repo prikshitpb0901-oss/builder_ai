@@ -34,6 +34,8 @@ from bs4 import BeautifulSoup  # noqa: E402
 from scripts.build_prototype import compact as compact_prototype, qualification_copy  # noqa: E402
 from scripts.run_brave_discovery import brave_search  # noqa: E402
 from norway_company_agent.news_credibility import detect_clickbait, evaluate_news_credibility, extract_domain, verify_entity_in_headline  # noqa: E402
+from norway_company_agent.external_connectors import discover_linkedin_company, discover_youtube_channel  # noqa: E402
+from norway_company_agent.social_security import detect_security_threats, verify_social_channel_security  # noqa: E402
 from scripts.run_annual_report_workforce_connector import extract_candidate, needs_ocr  # noqa: E402
 from scripts.normalize_google_maps_results import candidate_score  # noqa: E402
 from scripts.run_scrapy_websites import terminal_events_for_run  # noqa: E402
@@ -1411,6 +1413,92 @@ class NewsCredibilityTests(unittest.TestCase):
 
         v3 = verify_entity_in_headline("Byggmester Flo AS", "Helt urelatert nyhet om fotball")
         self.assertFalse(v3["matched"])
+
+
+class ExternalFootprintConnectorsTests(unittest.TestCase):
+    def test_linkedin_discovery_known_entity(self):
+        result = discover_linkedin_company("Equinor ASA", "923609016")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["platform"], "linkedin")
+        self.assertEqual(result["display_name"], "Equinor ASA")
+        self.assertIn("linkedin.com/company/", result["profile_url"])
+        self.assertTrue(result["exact_entity"])
+
+    def test_linkedin_discovery_unknown_entity_abstains(self):
+        result = discover_linkedin_company("ZzzNonexistentNorwegianFakeCompany999 AS", "999999999")
+        self.assertIsNone(result)
+
+    def test_youtube_discovery_known_entity(self):
+        result = discover_youtube_channel("Equinor ASA", "923609016", "equinor.com")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["platform"], "youtube")
+        self.assertEqual(result["channel_name"], "Equinor")
+        self.assertTrue(result["exact_entity"])
+        self.assertGreaterEqual(result["matched_videos_count"], 2)
+
+    def test_youtube_discovery_unknown_entity_abstains(self):
+        result = discover_youtube_channel("ZzzNonexistentNorwegianFakeCompany999 AS", "999999999")
+        self.assertIsNone(result)
+
+
+class SocialSecurityTests(unittest.TestCase):
+    def test_authentic_channel_passes_security(self):
+        cert = verify_social_channel_security(
+            platform="youtube",
+            channel_or_profile_name="Equinor",
+            target_url="https://www.youtube.com/channel/UCwyLglaZ7FUVAIZTBYvgC8w",
+            company_name="Equinor ASA",
+            content_samples=["Energy solutions on the Norwegian continental shelf", "Engineering official update"],
+            website_domain="equinor.com",
+        )
+        self.assertTrue(cert["is_safe"])
+        self.assertEqual(cert["security_tier"], "verified_safe_and_authentic")
+        self.assertTrue(cert["positive_purpose"])
+        self.assertEqual(len(cert["quarantine_reasons"]), 0)
+
+    def test_crypto_scam_impersonator_quarantined(self):
+        cert = verify_social_channel_security(
+            platform="youtube",
+            channel_or_profile_name="Equinor Official Crypto Giveaway",
+            target_url="https://youtube.com/channel/fake",
+            company_name="Equinor ASA",
+            content_samples=["Send 0.1 BTC to receive 0.2 BTC! Join t.me/airdrop telegram for bonus tokens"],
+        )
+        self.assertFalse(cert["is_safe"])
+        self.assertEqual(cert["security_tier"], "quarantined_threat")
+        self.assertEqual(cert["impersonation_risk"], "critical")
+        self.assertTrue(any("btc" in r or "giveaway" in r or "t.me" in r for r in cert["quarantine_reasons"]))
+
+    def test_recruitment_scam_profile_quarantined(self):
+        cert = verify_social_channel_security(
+            platform="linkedin",
+            channel_or_profile_name="Equinor Hiring Manager",
+            target_url="https://linkedin.com/in/fake-recruiter",
+            company_name="Equinor ASA",
+            content_samples=["Work from home jobs! Pay registration fee to start training immediately"],
+        )
+        self.assertFalse(cert["is_safe"])
+        self.assertEqual(cert["security_tier"], "quarantined_threat")
+        self.assertTrue(any("registration fee" in r for r in cert["quarantine_reasons"]))
+
+    def test_parody_and_smear_campaign_quarantined(self):
+        cert = verify_social_channel_security(
+            platform="linkedin",
+            channel_or_profile_name="Boycott Equinor Fraud Exposed",
+            target_url="https://linkedin.com/company/boycott-equinor",
+            company_name="Equinor ASA",
+            content_samples=["Parody account: scam alert and fake company exposed"],
+        )
+        self.assertFalse(cert["is_safe"])
+        self.assertEqual(cert["security_tier"], "quarantined_threat")
+        self.assertTrue(any("boycott" in r or "parody" in r for r in cert["quarantine_reasons"]))
+
+    def test_threat_detection_regex(self):
+        threats = detect_security_threats("Exclusive bitcoin doubler telegram giveaway t.me/profit")
+        self.assertGreaterEqual(len(threats), 3)
+
+        clean = detect_security_threats("Official corporate presentation of annual report and engineering results")
+        self.assertEqual(len(clean), 0)
 
 
 if __name__ == "__main__":

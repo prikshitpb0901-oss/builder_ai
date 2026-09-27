@@ -10,6 +10,7 @@ dependencies = [
   "pypdf>=6,<7",
   "tldextract>=5.3,<6",
   "trafilatura>=2.0,<3",
+  "yt-dlp>=2024,<2027",
 ]
 
 [project.optional-dependencies]
