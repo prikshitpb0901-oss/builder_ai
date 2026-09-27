@@ -33,6 +33,7 @@ from norway_company_agent.snapshots import SnapshotFetcher  # noqa: E402
 from bs4 import BeautifulSoup  # noqa: E402
 from scripts.build_prototype import compact as compact_prototype, qualification_copy  # noqa: E402
 from scripts.run_brave_discovery import brave_search  # noqa: E402
+from norway_company_agent.news_credibility import detect_clickbait, evaluate_news_credibility, extract_domain, verify_entity_in_headline  # noqa: E402
 from scripts.run_annual_report_workforce_connector import extract_candidate, needs_ocr  # noqa: E402
 from scripts.normalize_google_maps_results import candidate_score  # noqa: E402
 from scripts.run_scrapy_websites import terminal_events_for_run  # noqa: E402
@@ -1329,6 +1330,87 @@ class VerifiedSiteSeedTests(unittest.TestCase):
             failed = subprocess.run(command, capture_output=True, text=True)
             self.assertNotEqual(failed.returncode, 0)
             self.assertIn("unknown organisations", failed.stderr)
+
+
+class NewsCredibilityTests(unittest.TestCase):
+    def test_verified_editorial_news_accepted(self):
+        eval_result = evaluate_news_credibility(
+            title="2025-rekneskapen til Byggmester Flo AS er klar. Her er tala.",
+            publisher_name="nyss.no",
+            publisher_url="https://www.nyss.no",
+            source_link="https://news.google.com/rss/articles/abc",
+            published_at="2026-08-10T12:00:00Z",
+            company_name="Byggmester Flo AS",
+        )
+        self.assertGreaterEqual(eval_result["credibility_score"], 0.85)
+        self.assertEqual(eval_result["credibility_tier"], "high")
+        self.assertTrue(eval_result["is_publishable"])
+        self.assertEqual(len(eval_result["fatal_flags"]), 0)
+
+    def test_clickbait_and_sensationalism_rejected(self):
+        eval_result = evaluate_news_credibility(
+            title="SJOKK: DU VIL IKKE TRO HVA BYGGMESTER FLO AS GJORDE MED PENGENE DINE!!!",
+            publisher_name="Clickbait Blog",
+            publisher_url="https://viralclickbait.xyz",
+            source_link="https://viralclickbait.xyz/item",
+            published_at="2026-08-10T12:00:00Z",
+            company_name="Byggmester Flo AS",
+        )
+        self.assertLess(eval_result["credibility_score"], 0.50)
+        self.assertFalse(eval_result["is_publishable"])
+        self.assertIn("sensationalism_detected", eval_result["reasons"])
+
+    def test_blacklisted_disinformation_rejected(self):
+        eval_result = evaluate_news_credibility(
+            title="Byggmester Flo AS exposed in conspiracy",
+            publisher_name="Infowars",
+            publisher_url="https://infowars.com",
+            source_link="https://infowars.com/story",
+            published_at="2026-08-10T12:00:00Z",
+            company_name="Byggmester Flo AS",
+        )
+        self.assertEqual(eval_result["credibility_score"], 0.0)
+        self.assertEqual(eval_result["credibility_tier"], "rejected")
+        self.assertFalse(eval_result["is_publishable"])
+        self.assertTrue(any("blacklisted_source" in f for f in eval_result["fatal_flags"]))
+
+    def test_future_date_manipulation_rejected(self):
+        eval_result = evaluate_news_credibility(
+            title="Byggmester Flo AS signs major contract",
+            publisher_name="Unverified Press",
+            publisher_url="https://random-news.org",
+            source_link="https://random-news.org/news",
+            published_at="2028-12-31T00:00:00Z",
+            company_name="Byggmester Flo AS",
+        )
+        self.assertFalse(eval_result["is_publishable"])
+        self.assertTrue(any("future_date_manipulation" in f for f in eval_result["fatal_flags"]))
+
+    def test_domain_extraction(self):
+        self.assertEqual(extract_domain("https://www.nyss.no/artikkel/123"), "nyss.no")
+        self.assertEqual(extract_domain("http://e24.no"), "e24.no")
+        self.assertEqual(extract_domain("nrk.no"), "nrk.no")
+        self.assertEqual(extract_domain("https://sub.domain.dn.no/test"), "dn.no")
+
+    def test_clickbait_detection(self):
+        flags = detect_clickbait("DU VIL IKKE TRO DETTE!")
+        self.assertTrue(any("du vil ikke tro" in f for f in flags))
+        self.assertIn("all_caps_title", flags)
+
+        clean_flags = detect_clickbait("Byggmester Flo AS øker omsetningen i 2025")
+        self.assertEqual(len(clean_flags), 0)
+
+    def test_entity_verification_in_headline(self):
+        v1 = verify_entity_in_headline("Byggmester Flo AS", "Byggmester Flo AS øker omsetningen")
+        self.assertTrue(v1["matched"])
+        self.assertEqual(v1["mode"], "exact_legal_name")
+
+        v2 = verify_entity_in_headline("Byggmester Flo AS", "Byggmester Flo leverer gode tall")
+        self.assertTrue(v2["matched"])
+        self.assertEqual(v2["mode"], "multi_token_base_name")
+
+        v3 = verify_entity_in_headline("Byggmester Flo AS", "Helt urelatert nyhet om fotball")
+        self.assertFalse(v3["matched"])
 
 
 if __name__ == "__main__":

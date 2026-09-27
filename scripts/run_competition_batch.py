@@ -25,27 +25,21 @@ from norway_company_agent.research import synthesize_company_profile  # noqa: E4
 from norway_company_agent.website import fetch_website  # noqa: E402
 
 
-# ── Google News RSS inline connector ─────────────────────────────────────────
-LEGAL_SUFFIXES = {"as", "asa", "sa", "ba", "da", "ans", "enk", "nuf", "sti"}
+from norway_company_agent.news_credibility import evaluate_news_credibility  # noqa: E402
+
 NEWS_UA = "SignalpostResearchPOC/1.0 (https://builderr.ai; bounded qualification run)"
 
 
-def _exact_title_match(company_name: str, title: str) -> bool:
-    company_tokens = re.findall(r"[a-z0-9æøå]+", str(company_name or "").casefold())
-    title_tokens = re.findall(r"[a-z0-9æøå]+", str(title or "").rsplit(" - ", 1)[0].casefold())
-    if not company_tokens or not title_tokens or len(company_tokens) > len(title_tokens):
-        return False
-    allowed = {"av", "for", "fra", "hos", "i", "med", "om", "på", "til", "og", "kjøper", "velger"}
-    for i in range(len(title_tokens) - len(company_tokens) + 1):
-        if title_tokens[i:i + len(company_tokens)] != company_tokens:
-            continue
-        if i == 0 or title_tokens[i - 1] in allowed:
-            return True
-    return False
-
-
 def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
-    """Fetch Google News RSS mentions for a company. Returns observation dicts."""
+    """Fetch and credibility-verify Google News RSS mentions for a company.
+
+    Applies the 5-layer news credibility engine:
+    1. Publisher Whitelist (NRK, TV2, E24, DN, VG, local papers, wire services)
+    2. Domain Integrity (.no regulation & spam/disinformation blacklist)
+    3. Date Validity (temporal consistency, rejection of future timestamps)
+    4. Headline Quality (sensationalism and clickbait pattern detection)
+    5. Entity Specificity (exact legal entity reference in headline)
+    """
     org = str(profile["organisation_number"])
     name = profile.get("name", "")
     if not name:
@@ -62,18 +56,38 @@ def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
         for item in root.findall(".//item"):
             title = str(item.findtext("title") or "").strip()
             link = str(item.findtext("link") or "").strip()
+            source_elem = item.find("source")
             publisher = str(item.findtext("source") or "").strip()
-            if not link or not _exact_title_match(name, title):
+            publisher_url = source_elem.attrib.get("url", "") if source_elem is not None else ""
+
+            if not link or not title:
                 continue
+
             key = (title.casefold(), publisher.casefold())
             if key in seen:
                 continue
             seen.add(key)
+
             published = item.findtext("pubDate")
+            published_at = None
             try:
                 published_at = parsedate_to_datetime(published).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
             except Exception:
-                published_at = None
+                pass
+
+            cred = evaluate_news_credibility(
+                title=title,
+                publisher_name=publisher,
+                publisher_url=publisher_url,
+                source_link=link,
+                published_at=published_at,
+                company_name=name,
+            )
+
+            # Gate: Only publish verified news (score >= 0.50, zero fatal flags)
+            if not cred["is_publishable"]:
+                continue
+
             output.append({
                 "id": "google-news-" + hashlib.sha256(f"{org}|{title}|{publisher}".encode()).hexdigest()[:24],
                 "organisation_number": org,
@@ -85,6 +99,10 @@ def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
                 "exact_entity": True,
                 "text": title,
                 "publisher": publisher,
+                "publisher_domain": cred["evaluated_domain"],
+                "credibility_score": cred["credibility_score"],
+                "credibility_tier": cred["credibility_tier"],
+                "credibility_reasons": cred["reasons"],
             })
             if len(output) >= limit:
                 break
