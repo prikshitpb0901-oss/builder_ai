@@ -123,24 +123,52 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluator-owned Signalpost batch contract")
-    parser.add_argument("--organisations", required=True, help="JSON, JSONL, or text organisation-number list")
-    parser.add_argument("--bulk", required=True, help="Frozen Brreg entity snapshot")
-    parser.add_argument("--output", required=True, help="Terminal envelope JSONL")
-    parser.add_argument("--profiles-output", required=True)
-    parser.add_argument("--report", required=True)
-    parser.add_argument("--run-id", required=True)
-    parser.add_argument("--expected-count", type=int, default=100)
-    parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--organisations", "--orgs", "-i", dest="organisations", required=True, help="JSON, JSONL, or text organisation-number list")
+    parser.add_argument("--bulk", "-b", required=True, help="Frozen Brreg entity snapshot")
+    parser.add_argument("--output-dir", "--output_dir", "-d", dest="output_dir", default=None, help="Target output directory")
+    parser.add_argument("--output", "-o", default=None, help="Terminal envelope JSONL")
+    parser.add_argument("--profiles-output", "--profiles_output", default=None, help="Enriched profiles JSONL")
+    parser.add_argument("--report", "-r", default=None, help="Run report JSON")
+    parser.add_argument("--run-id", "--run_id", default=None, help="Unique run identifier")
+    parser.add_argument("--expected-count", "--expected_count", type=int, default=None, help="Expected number of organisations")
+    parser.add_argument("--workers", "-w", type=int, default=8)
     parser.add_argument("--checkpoint-every", type=int, default=25)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--modules", default="registry,accounting_obligation,registry_live,financials,roles,group,locations,website")
     args = parser.parse_args()
 
     started_at = utc_now()
+
+    # Resolve output directory and file paths
+    if args.output_dir:
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if not args.output:
+            args.output = str(out_dir / "envelopes.jsonl")
+        if not args.profiles_output:
+            args.profiles_output = str(out_dir / "profiles.jsonl")
+        if not args.report:
+            args.report = str(out_dir / "report.json")
+    else:
+        if not args.output:
+            out_dir = Path("out")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            args.output = str(out_dir / "envelopes.jsonl")
+        target_dir = Path(args.output).parent
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if not args.profiles_output:
+            args.profiles_output = str(target_dir / "profiles.jsonl")
+        if not args.report:
+            args.report = str(target_dir / "report.json")
+
+    if not args.run_id:
+        args.run_id = f"run-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+
     organisation_inputs = read_organisation_inputs(args.organisations)
     orgs = [item["organisation_number"] for item in organisation_inputs]
-    if len(orgs) != args.expected_count:
+    if args.expected_count is not None and len(orgs) != args.expected_count:
         raise SystemExit(f"Expected {args.expected_count} organisations, received {len(orgs)}")
+    expected_count = args.expected_count if args.expected_count is not None else len(orgs)
     profiles, registry_metadata = profiles_from_bulk(args.bulk, orgs)
     annotations = {item["organisation_number"]: item for item in organisation_inputs}
     for profile in profiles:
@@ -221,7 +249,7 @@ def main() -> None:
         terminal_envelope(profile, run_id=args.run_id, modules=requested_modules, started_at=started_at, completed_at=completed_at)
         for profile in ordered_profiles
     ]
-    validation = validate_envelopes(envelopes, args.expected_count)
+    validation = validate_envelopes(envelopes, expected_count)
     write_jsonl(profiles_output, ordered_profiles)
     write_jsonl(Path(args.output), envelopes)
     latencies = sorted(operations.pop("latencies_ms"))
@@ -231,7 +259,7 @@ def main() -> None:
         "run_id": args.run_id,
         "started_at": started_at,
         "completed_at": completed_at,
-        "expected_count": args.expected_count,
+        "expected_count": expected_count,
         "emitted_envelopes": len(envelopes),
         "resumed_profiles": resumed_profiles,
         "profiles_fetched_this_run": len(pending_profiles),

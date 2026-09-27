@@ -6,7 +6,7 @@ import csv
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +18,7 @@ from norway_company_agent.crawl_events import extract_page_event, merge_profile_
 from norway_company_agent.discovery import build_company_search_query, choose_search_candidate, parse_brave_web_results, score_search_candidate  # noqa: E402
 from norway_company_agent.official import _reserve_history_slot, accounting_obligation_assessment, normalize_entity, normalize_financial_history, normalize_financials, normalize_roles  # noqa: E402
 from norway_company_agent.operations import domain_request_summary, latency_summary, percentile  # noqa: E402
-from norway_company_agent.sampling import deterministic_extension_sample, deterministic_financial_filer_sample, deterministic_website_audit_sample, financial_filer_eligible, normalize_row, stratum  # noqa: E402
+from norway_company_agent.sampling import deterministic_extension_sample, deterministic_financial_filer_sample, deterministic_website_audit_sample, financial_filer_eligible, normalize_row, stratum, iter_bulk  # noqa: E402
 from norway_company_agent.research import answer_profile, parse_screen_query, screen_profiles  # noqa: E402
 from norway_company_agent.workspace import load_workspace, record_screen, save_workspace  # noqa: E402
 from norway_company_agent.refresh import diff_datasets, diff_profile  # noqa: E402
@@ -728,6 +728,24 @@ class OperationsTests(unittest.TestCase):
             path.write_text(json.dumps({"organisation_number": "923609016", "evaluation_split": "held_out", "sample_slice": "stress", "ignored": "x"}) + "\n", encoding="utf-8")
             self.assertEqual(read_organisation_inputs(path), [{"organisation_number": "923609016", "evaluation_split": "held_out", "sample_slice": "stress"}])
 
+    def test_iter_bulk_gzip_csv_magic_bytes_detection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            # Official Brreg bulk dump is gzip compressed but named brreg-enheter.csv
+            csv_path = Path(directory) / "brreg-enheter.csv"
+            raw_csv = (
+                "organisasjonsnummer;navn;organisasjonsform.kode;antallAnsatte\n"
+                "923609016;Test AS;AS;10\n"
+            ).encode("utf-8")
+            with gzip.open(csv_path, "wb") as gz_out:
+                gz_out.write(raw_csv)
+
+            records = list(iter_bulk(csv_path))
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["organisation_number"], "923609016")
+            self.assertEqual(records[0]["name"], "Test AS")
+            self.assertEqual(records[0]["legal_form"], "AS")
+            self.assertEqual(records[0]["employees"], 10)
+
     def test_batch_contract_emits_exact_terminal_envelopes(self):
         profile = {
             "organisation_number": "923609016",
@@ -1416,7 +1434,15 @@ class NewsCredibilityTests(unittest.TestCase):
 
 
 class ExternalFootprintConnectorsTests(unittest.TestCase):
-    def test_linkedin_discovery_known_entity(self):
+    @patch("urllib.request.urlopen")
+    def test_linkedin_discovery_known_entity(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps([
+            {"type": "COMPANY", "id": 12345, "displayName": "Equinor ASA"}
+        ]).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
         result = discover_linkedin_company("Equinor ASA", "923609016")
         self.assertIsNotNone(result)
         self.assertEqual(result["platform"], "linkedin")
@@ -1424,11 +1450,40 @@ class ExternalFootprintConnectorsTests(unittest.TestCase):
         self.assertIn("linkedin.com/company/", result["profile_url"])
         self.assertTrue(result["exact_entity"])
 
-    def test_linkedin_discovery_unknown_entity_abstains(self):
+    @patch("urllib.request.urlopen")
+    def test_linkedin_discovery_unknown_entity_abstains(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"[]"
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
         result = discover_linkedin_company("ZzzNonexistentNorwegianFakeCompany999 AS", "999999999")
         self.assertIsNone(result)
 
-    def test_youtube_discovery_known_entity(self):
+    @patch("yt_dlp.YoutubeDL")
+    def test_youtube_discovery_known_entity(self, mock_ydl_class):
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = {
+            "entries": [
+                {
+                    "channel": "Equinor",
+                    "channel_url": "https://www.youtube.com/channel/UCwyLglaZ7FUVAIZTBYvgC8w",
+                    "title": "Equinor corporate engineering",
+                    "url": "https://www.youtube.com/watch?v=video1",
+                    "description": "Equinor official energy updates equinor.com",
+                },
+                {
+                    "channel": "Equinor",
+                    "channel_url": "https://www.youtube.com/channel/UCwyLglaZ7FUVAIZTBYvgC8w",
+                    "title": "Energy transition in Norway",
+                    "url": "https://www.youtube.com/watch?v=video2",
+                    "description": "Official Equinor channel",
+                },
+            ]
+        }
+        mock_ydl.__enter__.return_value = mock_ydl
+        mock_ydl_class.return_value = mock_ydl
+
         result = discover_youtube_channel("Equinor ASA", "923609016", "equinor.com")
         self.assertIsNotNone(result)
         self.assertEqual(result["platform"], "youtube")
@@ -1436,7 +1491,13 @@ class ExternalFootprintConnectorsTests(unittest.TestCase):
         self.assertTrue(result["exact_entity"])
         self.assertGreaterEqual(result["matched_videos_count"], 2)
 
-    def test_youtube_discovery_unknown_entity_abstains(self):
+    @patch("yt_dlp.YoutubeDL")
+    def test_youtube_discovery_unknown_entity_abstains(self, mock_ydl_class):
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = {"entries": []}
+        mock_ydl.__enter__.return_value = mock_ydl
+        mock_ydl_class.return_value = mock_ydl
+
         result = discover_youtube_channel("ZzzNonexistentNorwegianFakeCompany999 AS", "999999999")
         self.assertIsNone(result)
 

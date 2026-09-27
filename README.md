@@ -56,14 +56,18 @@ uv run python select_entry_batch.py \
 # Start with ten companies before the full 1,000-company run.
 head -n 10 entry-companies.jsonl > smoke-companies.jsonl
 
+# Evaluator Single Entrypoint (Standard Builderr Contract):
+python run_agent.py \
+  --organisations smoke-companies.jsonl \
+  --bulk brreg-enheter.csv \
+  --output-dir out/smoke
+
+# Or via scripts/run_competition_batch.py:
 uv run python scripts/run_competition_batch.py \
   --organisations smoke-companies.jsonl \
   --bulk brreg-enheter.csv \
-  --profiles-output out/smoke-profiles.jsonl \
-  --output out/smoke-envelopes.jsonl \
-  --report out/smoke-report.json \
-  --run-id smoke-001 \
-  --expected-count 10
+  --output-dir out/smoke \
+  --run-id smoke-001
 
 # When the smoke output looks right, run your full entry.
 uv run python scripts/run_competition_batch.py \

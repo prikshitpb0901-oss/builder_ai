@@ -144,7 +144,14 @@ def deterministic_financial_filer_sample(
 
 def iter_bulk(path: str | Path) -> Iterable[dict[str, Any]]:
     p = Path(path)
-    opener = gzip.open if str(p).endswith(".gz") else open
+    is_gz = False
+    try:
+        with open(path, "rb") as probe:
+            is_gz = (probe.read(2) == b"\x1f\x8b")
+    except Exception:
+        is_gz = str(p).endswith(".gz")
+
+    opener = gzip.open if is_gz else open
     is_jsonl = ".jsonl" in p.name
     with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
         if is_jsonl:
@@ -172,7 +179,12 @@ def iter_bulk(path: str | Path) -> Iterable[dict[str, Any]]:
                 if len(str(row.get("organisation_number", ""))) == 9:
                     yield row
             return
-        dialect = csv.Sniffer().sniff(sample, delimiters=";,\t")
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=";,\t")
+        except Exception:
+            class DefaultDialect(csv.excel):
+                delimiter = ";"
+            dialect = DefaultDialect
         for row in csv.DictReader(handle, dialect=dialect):
             record = normalize_row(row)
             if len(record["organisation_number"]) == 9:
