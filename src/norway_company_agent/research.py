@@ -313,10 +313,19 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
                 "content_sha256": mod_rec.get("content_sha256"),
             })
 
+    # 6. Media coverage from news mentions
+    news = profile.get("news_mentions") or []
+    if news:
+        publishers = list({item.get("publisher", "unknown") for item in news})[:5]
+        media_coverage = f"{len(news)} recent news mention(s) found from: {', '.join(publishers)}."
+    else:
+        media_coverage = "No recent news mentions discovered via Google News RSS."
+
     return {
         "what_the_company_does": what_it_does,
         "financial_status": financial_status,
         "leadership_status": leadership_status,
+        "media_coverage": media_coverage,
         "what_remains_unknown": unknowns,
         "sources": sources,
     }

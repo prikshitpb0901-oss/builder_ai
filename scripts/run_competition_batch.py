@@ -2,9 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +23,74 @@ from norway_company_agent.identity import apply_website_identity_gate  # noqa: E
 from norway_company_agent.official import fetch_official_modules  # noqa: E402
 from norway_company_agent.research import synthesize_company_profile  # noqa: E402
 from norway_company_agent.website import fetch_website  # noqa: E402
+
+
+# ── Google News RSS inline connector ─────────────────────────────────────────
+LEGAL_SUFFIXES = {"as", "asa", "sa", "ba", "da", "ans", "enk", "nuf", "sti"}
+NEWS_UA = "SignalpostResearchPOC/1.0 (https://builderr.ai; bounded qualification run)"
+
+
+def _exact_title_match(company_name: str, title: str) -> bool:
+    company_tokens = re.findall(r"[a-z0-9æøå]+", str(company_name or "").casefold())
+    title_tokens = re.findall(r"[a-z0-9æøå]+", str(title or "").rsplit(" - ", 1)[0].casefold())
+    if not company_tokens or not title_tokens or len(company_tokens) > len(title_tokens):
+        return False
+    allowed = {"av", "for", "fra", "hos", "i", "med", "om", "på", "til", "og", "kjøper", "velger"}
+    for i in range(len(title_tokens) - len(company_tokens) + 1):
+        if title_tokens[i:i + len(company_tokens)] != company_tokens:
+            continue
+        if i == 0 or title_tokens[i - 1] in allowed:
+            return True
+    return False
+
+
+def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
+    """Fetch Google News RSS mentions for a company. Returns observation dicts."""
+    org = str(profile["organisation_number"])
+    name = profile.get("name", "")
+    if not name:
+        return []
+    query = urllib.parse.quote(f'"{name}" when:2y')
+    url = f"https://news.google.com/rss/search?q={query}&hl=no&gl=NO&ceid=NO:no"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": NEWS_UA, "Accept": "application/rss+xml"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read(2_000_000)
+        root = ET.fromstring(raw)
+        retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        output, seen = [], set()
+        for item in root.findall(".//item"):
+            title = str(item.findtext("title") or "").strip()
+            link = str(item.findtext("link") or "").strip()
+            publisher = str(item.findtext("source") or "").strip()
+            if not link or not _exact_title_match(name, title):
+                continue
+            key = (title.casefold(), publisher.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            published = item.findtext("pubDate")
+            try:
+                published_at = parsedate_to_datetime(published).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            except Exception:
+                published_at = None
+            output.append({
+                "id": "google-news-" + hashlib.sha256(f"{org}|{title}|{publisher}".encode()).hexdigest()[:24],
+                "organisation_number": org,
+                "platform": "news",
+                "signal_type": "public_mention",
+                "source_url": link,
+                "retrieved_at": retrieved_at,
+                "published_at": published_at,
+                "exact_entity": True,
+                "text": title,
+                "publisher": publisher,
+            })
+            if len(output) >= limit:
+                break
+        return output
+    except Exception:
+        return []
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -64,9 +139,14 @@ def main() -> None:
         if "website" in requested_modules:
             website_record, website_metrics = fetch_website(profile.get("website"))
             profile["evidence"]["website"] = apply_website_identity_gate(profile, website_record)["website"]
+        # Google News RSS enrichment (free, no API key)
+        news_mentions = _fetch_google_news(profile, limit=5)
+        news_request_count = 1  # one RSS request per company
+        if news_mentions:
+            profile["news_mentions"] = news_mentions
         profile["summary"] = synthesize_company_profile(profile)
         metric = {
-            "requests": len(metrics) + website_metrics["requests"],
+            "requests": len(metrics) + website_metrics["requests"] + news_request_count,
             "bytes": sum(item.bytes_received for item in metrics) + website_metrics["bytes"],
             "latencies_ms": [item.elapsed_ms for item in metrics] + website_metrics["latencies_ms"],
         }
