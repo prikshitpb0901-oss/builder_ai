@@ -61,20 +61,23 @@ def score_batch(report_path: Path, envelopes_path: Path, input_orgs_path: Path) 
     yt_count = sum(1 for p in profiles if (p.get("external_footprint") or {}).get("youtube"))
     news_count = sum(1 for p in profiles if p.get("news_mentions"))
 
+    total_envelopes = len(envelopes)
+    expected_orgs_count = len(input_orgs) if input_orgs else 100
+
     # ── Rubric Scoring (0–100) ──
     # 1. Coverage & Source Discovery (35 pts max)
-    # Company recall (70% weight = 24.5 pts): 100/100 companies retrieved
-    company_recall_score = (len(envelopes) / 100.0) * 24.5
+    # Company recall (70% weight = 24.5 pts)
+    company_recall_score = (total_envelopes / expected_orgs_count) * 24.5 if expected_orgs_count else 0.0
     # Claim recall (30% weight = 10.5 pts): 8 official modules + verified external footprint
     claim_recall_score = 7.5 + min(3.0, (1.0 if li_count > 0 else 0) + (1.0 if yt_count > 0 else 0) + (1.0 if news_count > 0 else 0))
     coverage_score = round(company_recall_score + claim_recall_score, 1)
 
     # 2. Accuracy, Exact Identity & Evidence (30 pts max)
     # Exact legal entity matching across name, legal form, industry, municipality (15 pts)
-    id_accuracy_ratio = (name_count + legal_count + ind_count + muni_count) / 400.0
+    id_accuracy_ratio = (name_count + legal_count + ind_count + muni_count) / (total_envelopes * 4.0) if total_envelopes else 0.0
     id_accuracy_score = id_accuracy_ratio * 15.0
     # Cryptographic SHA-256 evidence provenance on all observations (8 pts)
-    hash_provenance_score = (ev_count / 100.0) * 8.0
+    hash_provenance_score = (ev_count / total_envelopes) * 8.0 if total_envelopes else 0.0
     # Anti-hallucination & fake news/profile security defense (7 pts)
     security_accuracy_score = 6.7
     accuracy_score = round(id_accuracy_score + hash_provenance_score + security_accuracy_score, 1)

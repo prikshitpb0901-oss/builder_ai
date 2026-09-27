@@ -3,3 +3,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 *.tmp
+out/*.json*
+out/scheduled/
+out/check_matches.py
+out/debug_yt.py
+out/inspect_cred.py
+out/inspect_footprint.py
