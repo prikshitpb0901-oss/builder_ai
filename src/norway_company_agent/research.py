@@ -287,10 +287,25 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
         if rev_num is not None and profit_num is not None:
             financial_status = f"Reported {period} financial results: revenue {rev_num:,.0f} {curr} and annual result {profit_num:,.0f} {curr}."
+            if rev_num > 0:
+                margin = (profit_num / rev_num) * 100.0
+                financial_status += f" Operating profit margin: {margin:.1f}%."
         elif rev_num is not None:
             financial_status = f"Reported {period} revenue: {rev_num:,.0f} {curr}."
         else:
             financial_status = f"Annual accounts filed for period {period}."
+
+        # Multi-year revenue trend if prior account year available
+        if len(records) >= 2 and rev_num is not None:
+            prior = records[1]
+            try:
+                prior_rev = float(prior.get("revenue")) if prior.get("revenue") is not None else None
+            except (ValueError, TypeError):
+                prior_rev = None
+            if prior_rev is not None and prior_rev > 0:
+                growth = ((rev_num - prior_rev) / prior_rev) * 100.0
+                prior_year = str(prior.get("period", {}).get("tilDato", ""))[:4] if isinstance(prior.get("period"), dict) else "prior period"
+                financial_status += f" Multi-year revenue trend: {growth:+.1f}% YoY vs {prior_year}."
     else:
         financial_status = "No annual accounts record available in Regnskapsregisteret for this entity."
 
@@ -345,12 +360,31 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     else:
         digital_footprint = "No verified external social or corporate media profiles detected."
 
+    # 8. Hiring and career opportunities
+    hiring_items = []
+    website_hiring = (evidence.get("website", {}).get("value") or {}).get("hiring_links") or []
+    if website_hiring:
+        hiring_items.append(f"{len(website_hiring)} career link(s) on website")
+    ext_jobs = footprint.get("jobs") or profile.get("jobs") or []
+    if ext_jobs:
+        hiring_items.append(f"{len(ext_jobs)} public job posting(s)")
+    hiring_status = f"Hiring signals: {', '.join(hiring_items)}." if hiring_items else "No active recruitment postings detected."
+
+    # 9. Customer reviews and ratings
+    reviews = footprint.get("reviews") or profile.get("customer_reviews")
+    if reviews:
+        reviews_status = f"Customer reviews: {reviews.get('rating')}/5 rating ({reviews.get('review_count')} reviews on {reviews.get('platform')})."
+    else:
+        reviews_status = "No public customer review aggregations verified."
+
     return {
         "what_the_company_does": what_it_does,
         "financial_status": financial_status,
         "leadership_status": leadership_status,
         "media_coverage": media_coverage,
         "digital_footprint": digital_footprint,
+        "hiring_status": hiring_status,
+        "customer_reviews": reviews_status,
         "what_remains_unknown": unknowns,
         "sources": sources,
     }

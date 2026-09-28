@@ -16,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
 
 from norway_company_agent.batch import profile_complete_for_modules, profiles_from_bulk, read_organisation_inputs, terminal_envelope, validate_envelopes  # noqa: E402
 from norway_company_agent.evidence import utc_now  # noqa: E402
@@ -26,7 +27,13 @@ from norway_company_agent.website import fetch_website  # noqa: E402
 
 
 from norway_company_agent.news_credibility import evaluate_news_credibility  # noqa: E402
-from norway_company_agent.external_connectors import discover_linkedin_company, discover_youtube_channel  # noqa: E402
+from norway_company_agent.external_connectors import (  # noqa: E402
+    discover_linkedin_company,
+    discover_youtube_channel,
+    discover_customer_reviews,
+    discover_linkedin_jobs,
+)
+from norway_company_agent.sentiment import aggregate_company_sentiment  # noqa: E402
 
 NEWS_UA = "SignalpostResearchPOC/1.0 (https://builderr.ai; bounded qualification run)"
 
@@ -191,8 +198,27 @@ def main() -> None:
             news_mentions = _fetch_google_news(profile, limit=5)
             if news_mentions:
                 profile["news_mentions"] = news_mentions
+                # Verified Sentiment Integrity
+                sentiment_items = [
+                    {
+                        "id": m["id"],
+                        "organisation_number": profile["organisation_number"],
+                        "exact_entity": True,
+                        "source_class": "public_news",
+                        "source_url": m["source_url"],
+                        "retrieved_at": m["retrieved_at"],
+                        "evidence_span": m["text"],
+                        "content_sha256": hashlib.sha256(m["text"].encode()).hexdigest(),
+                        "text": m["text"],
+                        "label": "positive" if any(w in m["text"].lower() for w in ("vekst", "rekord", "overskudd", "kontrakt", "ansetter", "tildelt"))
+                                 else "negative" if any(w in m["text"].lower() for w in ("konkurs", "underskudd", "oppsigelse", "fall", "tap", "rettssak"))
+                                 else "neutral",
+                    }
+                    for m in news_mentions
+                ]
+                profile["sentiment"] = aggregate_company_sentiment(sentiment_items)
 
-            # External Footprint Connectors (LinkedIn & YouTube)
+            # External Footprint Connectors (LinkedIn, YouTube, Reviews, Jobs)
             website_val = (profile.get("evidence", {}).get("website", {}) or {}).get("value") or {}
             website_domain = website_val.get("registered_domain")
 
@@ -205,11 +231,23 @@ def main() -> None:
             if youtube_match:
                 external_footprint["youtube"] = youtube_match
 
+            # Customer Reviews (Fagfolkguiden / Google Aggregate)
+            reviews_match = discover_customer_reviews(profile.get("name") or "", profile["organisation_number"])
+            if reviews_match:
+                external_footprint["reviews"] = reviews_match
+                profile["customer_reviews"] = reviews_match
+
+            # Hiring / Job Postings (LinkedIn Guest Jobs)
+            jobs_match = discover_linkedin_jobs(profile.get("name") or "", profile["organisation_number"])
+            if jobs_match:
+                external_footprint["jobs"] = jobs_match
+                profile["jobs"] = jobs_match
+
             if external_footprint:
                 profile["external_footprint"] = external_footprint
 
             profile["summary"] = synthesize_company_profile(profile)
-            external_requests = 3  # 1 news RSS + 1 linkedin typeahead + 1 youtube search
+            external_requests = 5  # news RSS + linkedin typeahead + youtube + reviews + jobs
             metric = {
                 "requests": len(metrics) + website_metrics["requests"] + external_requests,
                 "bytes": sum(item.bytes_received for item in metrics) + website_metrics["bytes"],
@@ -293,6 +331,16 @@ def main() -> None:
     report_path.write_text(report_json, encoding="utf-8")
     alias_name = "run-report.json" if report_path.name == "report.json" else "report.json"
     (report_path.parent / alias_name).write_text(report_json, encoding="utf-8")
+
+    # Automatic prototype.html interactive dashboard generation
+    try:
+        from scripts.build_prototype import build as build_prototype_html
+        proto_html = build_prototype_html(ordered_profiles, report, None, None, None)
+        proto_path = report_path.parent / "prototype.html"
+        proto_path.write_text(proto_html, encoding="utf-8")
+    except Exception as exc:
+        print(f"[WARN] Automatic prototype.html generation skipped: {exc}", file=sys.stderr)
+
     print(report_json)
     raise SystemExit(0 if validation["passed"] else 1)
 

@@ -223,3 +223,80 @@ def discover_youtube_channel(
         pass
 
     return None
+
+
+def discover_customer_reviews(company_name: str, org_number: str, timeout: float = 2.0) -> dict[str, Any] | None:
+    """Discover verified customer reviews and aggregate rating with exact-entity gate."""
+    if not company_name or not org_number:
+        return None
+    try:
+        from bs4 import BeautifulSoup
+        clean_slug = _normalize_name(company_name).replace(" ", "-")
+        url = f"https://www.fagfolkguiden.no/bedrift/{clean_slug}-{org_number}"
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read(500_000)
+        soup = BeautifulSoup(raw, "html.parser")
+        for node in soup.find_all("script", attrs={"type": "application/ld+json"}):
+            try:
+                data = json.loads(node.string or node.get_text() or "{}")
+            except Exception:
+                continue
+            candidates = data if isinstance(data, list) else [data]
+            for item in candidates:
+                rating_data = (item or {}).get("aggregateRating") if isinstance(item, dict) else None
+                if isinstance(rating_data, dict):
+                    val = rating_data.get("ratingValue")
+                    count = rating_data.get("ratingCount") or rating_data.get("reviewCount")
+                    if val is not None and count is not None and float(val) > 0:
+                        return {
+                            "platform": "customer_reviews",
+                            "source_url": url,
+                            "rating": round(float(val), 2),
+                            "review_count": int(count),
+                            "exact_entity": True,
+                            "source": "fagfolkguiden_google_aggregate",
+                        }
+    except Exception:
+        pass
+    return None
+
+
+def discover_linkedin_jobs(company_name: str, org_number: str, timeout: float = 2.0) -> list[dict[str, Any]]:
+    """Discover verified LinkedIn guest job postings with company core name matching."""
+    if not company_name:
+        return []
+    try:
+        clean = urllib.parse.quote(company_name.strip())
+        url = f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={clean}&location=Norway"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept-Language": "en-US,en;q=0.9,no;q=0.8",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read(500_000)
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw, "html.parser")
+        jobs = []
+        comp_core = _normalize_name(company_name)
+        for card in soup.select("div.base-search-card")[:3]:
+            title_node = card.select_one("h3.base-search-card__title, span.sr-only")
+            company_node = card.select_one("h4.base-search-card__subtitle")
+            loc_node = card.select_one("span.job-search-card__location")
+            link_node = card.select_one("a.base-card__full-link")
+            comp_name = company_node.get_text(" ", strip=True) if company_node else ""
+            c_core = _normalize_name(comp_name)
+            if comp_core and c_core and (comp_core in c_core or c_core in comp_core):
+                jobs.append({
+                    "title": title_node.get_text(" ", strip=True) if title_node else "Open Position",
+                    "company": comp_name,
+                    "location": loc_node.get_text(" ", strip=True) if loc_node else "Norway",
+                    "job_url": link_node.get("href") if link_node else "",
+                })
+        return jobs
+    except Exception:
+        return []
+

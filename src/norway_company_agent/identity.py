@@ -41,7 +41,7 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     rendered = value.get("js_fallback") or {}
     homepage_identity_parts = [
         value.get("title"), value.get("description"), value.get("identity_text_excerpt"), hostname, *structured_names,
-        rendered.get("title"),
+        rendered.get("title"), value.get("footer_text"),
     ]
     candidate_parts = [
         *homepage_identity_parts, value.get("main_text_excerpt"),
@@ -57,6 +57,12 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     org_digits = re.sub(r"\D", "", str(profile.get("organisation_number") or ""))
     compact_candidate = re.sub(r"\D", "", candidate_text)
     compact_homepage_candidate = re.sub(r"\D", "", homepage_candidate_text)
+    footer_text = str(value.get("footer_text") or "")
+    footer_digits = re.sub(r"\D", "", footer_text)
+    org_in_footer = bool(org_digits and (org_digits in footer_digits or org_digits in compact_homepage_candidate))
+    legal_org_prefixed = bool(
+        org_digits and re.search(rf"(?:org(?:anis[a-z]+)?\.?\s*(?:nr|nummer)?|mva|foretaksregisteret)\D{{0,15}}{org_digits}", candidate_text, re.I)
+    )
     overlap = sorted(set(core) & candidate_tokens)
     ratio = len(overlap) / len(set(core)) if core else 0.0
     reasons = []
@@ -76,9 +82,9 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     elif is_business_sports_club and "bedriftsidrett" not in normalized_candidate_text and "b i l" not in normalized_candidate_text:
         score = 0.3
         reasons.append("business sports-club entity points to the operating company's site without club evidence")
-    elif org_digits and org_digits in compact_homepage_candidate:
+    elif org_digits and (org_in_footer or legal_org_prefixed):
         score = 1.0
-        reasons.append("exact organisation number appears in homepage identity evidence")
+        reasons.append("exact organisation number appears in website footer/imprint or identity evidence")
     elif len(core) >= 2 and exact_homepage_name:
         score = 0.95
         reasons.append("all normalized legal-name tokens appear together in homepage identity evidence")

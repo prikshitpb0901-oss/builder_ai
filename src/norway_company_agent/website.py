@@ -34,6 +34,7 @@ PRIORITY_TERMS = (
     "om-oss", "om_oss", "about", "kontakt", "contact", "ledelse", "management",
     "team", "people", "locations", "lokasjoner", "avdelinger", "butikker",
     "news", "press", "aktuelt", "nyheter",
+    "karriere", "career", "jobb", "ledige-stillinger", "stillinger",
 )
 
 
@@ -289,6 +290,16 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
         title = soup.title.get_text(" ", strip=True) if soup.title else ""
         description_tag = soup.select_one('meta[name="description"], meta[property="og:description"]')
         description = str(description_tag.get("content") or "").strip() if description_tag else ""
+        footer_node = soup.select_one("footer")
+        footer_text = footer_node.get_text(" ", strip=True) if footer_node else (text[-1000:] if len(text) > 1000 else text)
+        career_anchors = []
+        for anchor in soup.select("a[href]"):
+            ahref = str(anchor.get("href") or "").lower()
+            atext = anchor.get_text(" ", strip=True).lower()
+            if any(term in ahref or term in atext for term in ("karriere", "career", "jobb", "ledige-stillinger", "stillinger")):
+                c_url = urllib.parse.urljoin(final_url, str(anchor.get("href")))
+                if c_url not in career_anchors:
+                    career_anchors.append(c_url)
         value = {
             "requested_url": normalized,
             "final_url": final_url,
@@ -296,6 +307,8 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
             "title": title[:500],
             "description": description[:2000],
             "main_text_excerpt": text[:5000],
+            "footer_text": footer_text[:2000],
+            "hiring_links": career_anchors[:5],
             "social_links": _social_links(final_url, soup),
             "structured_organisations": _jsonld_organisations(structured),
             "content_sha256": __import__("hashlib").sha256(raw).hexdigest(),
