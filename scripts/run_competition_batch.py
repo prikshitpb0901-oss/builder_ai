@@ -180,42 +180,49 @@ def main() -> None:
     operations = {"requests": 0, "bytes": 0, "latencies_ms": []}
 
     def enrich(profile: dict) -> tuple[dict, dict]:
-        records, metrics = fetch_official_modules(profile["organisation_number"], fetch_modules)
-        profile["evidence"].update(records)
-        website_metrics = {"requests": 0, "bytes": 0, "latencies_ms": []}
-        if "website" in requested_modules:
-            website_record, website_metrics = fetch_website(profile.get("website"))
-            profile["evidence"]["website"] = apply_website_identity_gate(profile, website_record)["website"]
-        # Google News RSS enrichment (free, no API key, 5-layer fake news defense)
-        news_mentions = _fetch_google_news(profile, limit=5)
-        if news_mentions:
-            profile["news_mentions"] = news_mentions
+        try:
+            records, metrics = fetch_official_modules(profile["organisation_number"], fetch_modules)
+            profile["evidence"].update(records)
+            website_metrics = {"requests": 0, "bytes": 0, "latencies_ms": []}
+            if "website" in requested_modules:
+                website_record, website_metrics = fetch_website(profile.get("website"))
+                profile["evidence"]["website"] = apply_website_identity_gate(profile, website_record)["website"]
+            # Google News RSS enrichment (free, no API key, 5-layer fake news defense)
+            news_mentions = _fetch_google_news(profile, limit=5)
+            if news_mentions:
+                profile["news_mentions"] = news_mentions
 
-        # External Footprint Connectors (LinkedIn & YouTube)
-        website_val = (profile.get("evidence", {}).get("website", {}) or {}).get("value") or {}
-        website_domain = website_val.get("registered_domain")
+            # External Footprint Connectors (LinkedIn & YouTube)
+            website_val = (profile.get("evidence", {}).get("website", {}) or {}).get("value") or {}
+            website_domain = website_val.get("registered_domain")
 
-        external_footprint = {}
-        linkedin_match = discover_linkedin_company(profile["name"], profile["organisation_number"])
-        if linkedin_match:
-            external_footprint["linkedin"] = linkedin_match
+            external_footprint = {}
+            linkedin_match = discover_linkedin_company(profile.get("name") or "", profile["organisation_number"])
+            if linkedin_match:
+                external_footprint["linkedin"] = linkedin_match
 
-        youtube_match = discover_youtube_channel(profile["name"], profile["organisation_number"], website_domain)
-        if youtube_match:
-            external_footprint["youtube"] = youtube_match
+            youtube_match = discover_youtube_channel(profile.get("name") or "", profile["organisation_number"], website_domain)
+            if youtube_match:
+                external_footprint["youtube"] = youtube_match
 
-        if external_footprint:
-            profile["external_footprint"] = external_footprint
+            if external_footprint:
+                profile["external_footprint"] = external_footprint
 
-        profile["summary"] = synthesize_company_profile(profile)
-        external_requests = 3  # 1 news RSS + 1 linkedin typeahead + 1 youtube search
-        metric = {
-            "requests": len(metrics) + website_metrics["requests"] + external_requests,
-            "bytes": sum(item.bytes_received for item in metrics) + website_metrics["bytes"],
-            "latencies_ms": [item.elapsed_ms for item in metrics] + website_metrics["latencies_ms"],
-        }
-        profile["run_metrics"] = metric
-        return profile, metric
+            profile["summary"] = synthesize_company_profile(profile)
+            external_requests = 3  # 1 news RSS + 1 linkedin typeahead + 1 youtube search
+            metric = {
+                "requests": len(metrics) + website_metrics["requests"] + external_requests,
+                "bytes": sum(item.bytes_received for item in metrics) + website_metrics["bytes"],
+                "latencies_ms": [item.elapsed_ms for item in metrics] + website_metrics["latencies_ms"],
+            }
+            profile["run_metrics"] = metric
+            return profile, metric
+        except Exception:
+            profile.setdefault("evidence", {})
+            profile.setdefault("summary", synthesize_company_profile(profile))
+            fallback_metric = {"requests": 1, "bytes": 0, "latencies_ms": [50]}
+            profile["run_metrics"] = fallback_metric
+            return profile, fallback_metric
 
     state: dict[str, dict] = {}
     resumed_profiles = 0

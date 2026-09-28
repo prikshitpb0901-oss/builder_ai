@@ -279,8 +279,16 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
             period = f"{til[:4]} ({fra} to {til})" if fra and til else str(period_raw)
         else:
             period = str(period_raw or "latest period")
-        if rev is not None and profit is not None:
-            financial_status = f"Reported {period} financial results: revenue {rev:,.0f} {curr} and annual result {profit:,.0f} {curr}."
+        try:
+            rev_num = float(rev) if rev is not None else None
+            profit_num = float(profit) if profit is not None else None
+        except (ValueError, TypeError):
+            rev_num, profit_num = None, None
+
+        if rev_num is not None and profit_num is not None:
+            financial_status = f"Reported {period} financial results: revenue {rev_num:,.0f} {curr} and annual result {profit_num:,.0f} {curr}."
+        elif rev_num is not None:
+            financial_status = f"Reported {period} revenue: {rev_num:,.0f} {curr}."
         else:
             financial_status = f"Annual accounts filed for period {period}."
     else:

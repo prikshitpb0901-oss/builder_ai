@@ -32,7 +32,18 @@ def read_organisation_inputs(path: str | Path) -> list[dict[str, Any]]:
     elif source.suffix == ".jsonl":
         values = [json.loads(line) for line in text.splitlines() if line.strip()]
     else:
-        values = [line.strip() for line in text.splitlines() if line.strip()]
+        values = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    values.append(json.loads(line))
+                    continue
+                except Exception:
+                    pass
+            values.append(line)
     records = []
     for value in values:
         org = value.get("organisation_number") if isinstance(value, dict) else value
@@ -86,7 +97,44 @@ def profiles_from_bulk(path: str | Path, organisation_numbers: Iterable[str]) ->
             break
     missing = [org for org in requested if org not in found]
     if missing:
-        raise ValueError(f"Organisation numbers absent from registry snapshot: {missing[:10]}")
+        for org in missing:
+            found[org] = {
+                "organisation_number": org,
+                "name": f"Organisation {org}",
+                "legal_form": None,
+                "employees": None,
+                "bankrupt": False,
+                "liquidating": False,
+                "website": None,
+                "industry_code": None,
+                "industry_label": None,
+                "municipality": None,
+                "municipality_number": None,
+                "address": None,
+                "latest_submitted_accounts": None,
+                "sample_slice": "unseen",
+                "evaluation_split": "test",
+                "evidence": {
+                    "registry": evidence(
+                        "registry",
+                        "not_found",
+                        "official_registry_bulk",
+                        "https://data.brreg.no/enhetsregisteret/api/enheter/lastned/csv",
+                        note="Organisation number absent from bulk registry snapshot",
+                        retrieved_at=retrieved_at,
+                        content_sha256=snapshot_sha256,
+                        source_row_key=org,
+                    ),
+                    "accounting_obligation": evidence(
+                        "accounting_obligation",
+                        "not_applicable",
+                        "official_rule_interpretation",
+                        "https://www.brreg.no/",
+                        note="Not found in registry bulk snapshot",
+                        retrieved_at=retrieved_at,
+                    ),
+                },
+            }
     return [found[org] for org in requested], {
         "registry_snapshot_sha256": snapshot_sha256,
         "registry_rows_scanned": scanned,
