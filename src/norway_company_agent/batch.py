@@ -98,17 +98,44 @@ def profiles_from_bulk(path: str | Path, organisation_numbers: Iterable[str]) ->
     missing = [org for org in requested if org not in found]
     if missing:
         for org in missing:
+            real_name = f"Organisation {org}"
+            legal_form = None
+            municipality = None
+            industry_code = None
+            industry_label = None
+            employees = None
+            website = None
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    f"https://data.brreg.no/enhetsregisteret/api/enheter/{org}",
+                    headers={"Accept": "application/json", "User-Agent": "builderr-signalpost-poc/0.1 (+https://builderr.ai)"},
+                )
+                with urllib.request.urlopen(req, timeout=2.0) as resp:
+                    if resp.status == 200:
+                        live_data = json.loads(resp.read().decode("utf-8", errors="replace"))
+                        if isinstance(live_data, dict):
+                            real_name = live_data.get("navn") or real_name
+                            legal_form = (live_data.get("organisasjonsform") or {}).get("kode")
+                            municipality = (live_data.get("forretningsadresse") or {}).get("kommune")
+                            industry_code = (live_data.get("naeringskode1") or {}).get("kode")
+                            industry_label = (live_data.get("naeringskode1") or {}).get("beskrivelse")
+                            employees = live_data.get("antallAnsatte")
+                            website = live_data.get("hjemmeside")
+            except Exception:
+                pass
+
             found[org] = {
                 "organisation_number": org,
-                "name": f"Organisation {org}",
-                "legal_form": None,
-                "employees": None,
+                "name": real_name,
+                "legal_form": legal_form,
+                "employees": employees,
                 "bankrupt": False,
                 "liquidating": False,
-                "website": None,
-                "industry_code": None,
-                "industry_label": None,
-                "municipality": None,
+                "website": website,
+                "industry_code": industry_code,
+                "industry_label": industry_label,
+                "municipality": municipality,
                 "municipality_number": None,
                 "address": None,
                 "latest_submitted_accounts": None,

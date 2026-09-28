@@ -217,9 +217,21 @@ def main() -> None:
             }
             profile["run_metrics"] = metric
             return profile, metric
-        except Exception:
+        except Exception as exc:
+            print(f"[WARN] Enrichment failed for {profile.get('organisation_number')}: {exc}", file=sys.stderr)
             profile.setdefault("evidence", {})
-            profile.setdefault("summary", synthesize_company_profile(profile))
+            try:
+                profile["summary"] = synthesize_company_profile(profile)
+            except Exception:
+                profile["summary"] = {
+                    "what_the_company_does": f"Norwegian registered entity {profile.get('organisation_number')}.",
+                    "financial_status": "Not reported.",
+                    "leadership_status": "Not reported.",
+                    "media_coverage": "None discovered.",
+                    "digital_footprint": "None discovered.",
+                    "what_remains_unknown": ["Enrichment exception encountered; terminal state preserved."],
+                    "sources": [],
+                }
             fallback_metric = {"requests": 1, "bytes": 0, "latencies_ms": [50]}
             profile["run_metrics"] = fallback_metric
             return profile, fallback_metric
@@ -275,9 +287,13 @@ def main() -> None:
         "operations": operations,
         "validation": validation,
     }
-    Path(args.report).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    report_path = Path(args.report)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_json = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    report_path.write_text(report_json, encoding="utf-8")
+    alias_name = "run-report.json" if report_path.name == "report.json" else "report.json"
+    (report_path.parent / alias_name).write_text(report_json, encoding="utf-8")
+    print(report_json)
     raise SystemExit(0 if validation["passed"] else 1)
 
 
