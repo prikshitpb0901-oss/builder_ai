@@ -1,7 +1,7 @@
 {
-  "run_id": "run-submission-1000",
-  "started_at": "2026-09-25T15:14:02.646343Z",
-  "completed_at": "2026-09-25T15:21:41.460619Z",
+  "run_id": "run-1000-full-refresh",
+  "started_at": "2026-09-28T11:06:51.384142Z",
+  "completed_at": "2026-09-28T11:40:52.600424Z",
   "expected_count": 1000,
   "emitted_envelopes": 1000,
   "resumed_profiles": 0,
@@ -23,10 +23,10 @@
     "selected": 1000
   },
   "operations": {
-    "requests": 5604,
-    "bytes": 63397285,
-    "p50_ms": 1129,
-    "p95_ms": 1529
+    "requests": 8600,
+    "bytes": 67714500,
+    "p50_ms": 1045,
+    "p95_ms": 1372
   },
   "validation": {
     "passed": true,
