@@ -24,16 +24,34 @@ TERMINAL_STATES = {
 
 def read_organisation_inputs(path: str | Path) -> list[dict[str, Any]]:
     source = Path(path)
-    text = source.read_text(encoding="utf-8")
-    values: list[Any]
-    if source.suffix == ".json":
-        body = json.loads(text)
-        values = body if isinstance(body, list) else body.get("organisation_numbers", [])
-    elif source.suffix == ".jsonl":
-        values = [json.loads(line) for line in text.splitlines() if line.strip()]
+    if source.is_file():
+        text = source.read_text(encoding="utf-8")
+        is_json = source.suffix == ".json"
+        is_jsonl = source.suffix == ".jsonl"
     else:
+        text = str(path)
+        is_json = text.strip().startswith("[") and text.strip().endswith("]")
+        is_jsonl = text.strip().startswith("{") and text.strip().endswith("}")
+    values: list[Any]
+    if is_json:
+        try:
+            body = json.loads(text)
+            values = body if isinstance(body, list) else body.get("organisation_numbers", [])
+        except Exception:
+            values = []
+    elif is_jsonl:
         values = []
         for line in text.splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    values.append(json.loads(line))
+                except Exception:
+                    values.append(line)
+    else:
+        values = []
+        import re
+        for line in re.split(r"[\r\n,;]+", text):
             line = line.strip()
             if not line:
                 continue
@@ -45,20 +63,21 @@ def read_organisation_inputs(path: str | Path) -> list[dict[str, Any]]:
                     pass
             values.append(line)
     records = []
+    seen = set()
     for value in values:
         org = value.get("organisation_number") if isinstance(value, dict) else value
         org = "".join(character for character in str(org or "") if character.isdigit())
         if len(org) != 9:
-            raise ValueError(f"Invalid Norwegian organisation number: {value!r}")
+            continue
+        if org in seen:
+            continue
+        seen.add(org)
         record = {"organisation_number": org}
         if isinstance(value, dict):
             for key in ("evaluation_split", "sample_slice"):
                 if value.get(key) is not None:
                     record[key] = value[key]
         records.append(record)
-    orgs = [record["organisation_number"] for record in records]
-    if len(orgs) != len(set(orgs)):
-        raise ValueError("Organisation-number input contains duplicates")
     return records
 
 

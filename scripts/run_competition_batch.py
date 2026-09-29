@@ -179,9 +179,10 @@ def main() -> None:
     profiles, registry_metadata = profiles_from_bulk(args.bulk, orgs)
     annotations = {item["organisation_number"]: item for item in organisation_inputs}
     for profile in profiles:
+        ann = annotations.get(profile["organisation_number"], {})
         for key in ("evaluation_split", "sample_slice"):
-            if key in annotations[profile["organisation_number"]]:
-                profile[key] = annotations[profile["organisation_number"]][key]
+            if key in ann:
+                profile[key] = ann[key]
     requested_modules = [item.strip() for item in args.modules.split(",") if item.strip()]
     fetch_modules = set(requested_modules) - {"registry", "accounting_obligation", "website"}
     operations = {"requests": 0, "bytes": 0, "latencies_ms": []}
@@ -309,7 +310,7 @@ def main() -> None:
     validation = validate_envelopes(envelopes, expected_count)
     write_jsonl(profiles_output, ordered_profiles)
     write_jsonl(Path(args.output), envelopes)
-    latencies = sorted(operations.pop("latencies_ms"))
+    latencies = sorted(operations.pop("latencies_ms", []))
     operations["p50_ms"] = latencies[len(latencies) // 2] if latencies else None
     operations["p95_ms"] = latencies[min(len(latencies) - 1, int(len(latencies) * 0.95))] if latencies else None
     report = {
