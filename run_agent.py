@@ -16,4 +16,23 @@ sys.path.insert(0, str(ROOT))
 from scripts.run_competition_batch import main
 
 if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        bulk_candidates = [
+            ROOT / "signalpost-company-universe-2025.jsonl.gz",
+            ROOT / "brreg-enheter.csv",
+            ROOT / "signalpost-universe.jsonl.gz",
+            ROOT.parent / "signalpost-company-universe-2025.jsonl.gz",
+        ]
+        org_candidates = [
+            ROOT / "batch-100.jsonl",
+            ROOT / "entry-companies.jsonl",
+            ROOT / "smoke-companies.jsonl",
+        ]
+        chosen_bulk = next((str(p) for p in bulk_candidates if p.exists()), "signalpost-company-universe-2025.jsonl.gz")
+        chosen_orgs = next((str(p) for p in org_candidates if p.exists()), "batch-100.jsonl")
+        sys.argv.extend([
+            "--organisations", chosen_orgs,
+            "--bulk", chosen_bulk,
+            "--output-dir", "out",
+        ])
     main()
