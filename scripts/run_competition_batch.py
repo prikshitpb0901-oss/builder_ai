@@ -259,6 +259,15 @@ def main() -> None:
         except Exception as exc:
             print(f"[WARN] Enrichment failed for {profile.get('organisation_number')}: {exc}", file=sys.stderr)
             profile.setdefault("evidence", {})
+            for mod in requested_modules:
+                if mod not in profile["evidence"]:
+                    profile["evidence"][mod] = evidence(
+                        mod,
+                        "source_error",
+                        "official_api",
+                        "https://data.brreg.no",
+                        note=f"Enrichment exception: {exc}",
+                    )
             try:
                 profile["summary"] = synthesize_company_profile(profile)
             except Exception:

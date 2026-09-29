@@ -22,23 +22,46 @@ sys.path.insert(0, str(ROOT))
 from scripts.run_competition_batch import main
 
 if __name__ == "__main__":
-    if len(sys.argv) == 1:
-        bulk_candidates = [
-            ROOT / "signalpost-company-universe-2025.jsonl.gz",
-            ROOT / "brreg-enheter.csv",
-            ROOT / "signalpost-universe.jsonl.gz",
-            ROOT.parent / "signalpost-company-universe-2025.jsonl.gz",
-        ]
+    args = sys.argv[1:]
+
+    # 1. Handle positional argument if provided (e.g. `python run_agent.py daily_100.txt`)
+    org_flag_present = any(arg in args for arg in ("--organisations", "--orgs", "-i"))
+    if not org_flag_present:
+        positional = [a for a in args if not a.startswith("-")]
+        if positional:
+            target_org = positional[0]
+            args.remove(target_org)
+            args.extend(["--organisations", target_org])
+            org_flag_present = True
+
+    # 2. Provide smart defaults for any missing essential arguments
+    bulk_candidates = [
+        ROOT / "signalpost-company-universe-2025.jsonl.gz",
+        ROOT / "brreg-enheter.csv",
+        ROOT / "signalpost-universe.jsonl.gz",
+        ROOT.parent / "signalpost-company-universe-2025.jsonl.gz",
+        Path.cwd() / "signalpost-company-universe-2025.jsonl.gz",
+        Path.cwd() / "brreg-enheter.csv",
+    ]
+    chosen_bulk = next((str(p) for p in bulk_candidates if p.exists()), str(ROOT / "signalpost-company-universe-2025.jsonl.gz"))
+
+    if not org_flag_present:
         org_candidates = [
             ROOT / "batch-100.jsonl",
             ROOT / "entry-companies.jsonl",
             ROOT / "smoke-companies.jsonl",
+            Path.cwd() / "batch-100.jsonl",
         ]
-        chosen_bulk = next((str(p) for p in bulk_candidates if p.exists()), "signalpost-company-universe-2025.jsonl.gz")
-        chosen_orgs = next((str(p) for p in org_candidates if p.exists()), "batch-100.jsonl")
-        sys.argv.extend([
-            "--organisations", chosen_orgs,
-            "--bulk", chosen_bulk,
-            "--output-dir", "out",
-        ])
+        chosen_orgs = next((str(p) for p in org_candidates if p.exists()), str(ROOT / "batch-100.jsonl"))
+        args.extend(["--organisations", chosen_orgs])
+
+    bulk_flag_present = any(arg in args for arg in ("--bulk", "-b"))
+    if not bulk_flag_present:
+        args.extend(["--bulk", chosen_bulk])
+
+    out_flag_present = any(arg in args for arg in ("--output-dir", "--output_dir", "-d", "--output", "-o"))
+    if not out_flag_present:
+        args.extend(["--output-dir", "out"])
+
+    sys.argv = [sys.argv[0]] + args
     main()

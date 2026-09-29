@@ -24,8 +24,12 @@ TERMINAL_STATES = {
 
 def read_organisation_inputs(path: str | Path) -> list[dict[str, Any]]:
     source = Path(path)
+    if not source.is_file():
+        root_cand = Path(__file__).resolve().parents[2] / path
+        if root_cand.is_file():
+            source = root_cand
     if source.is_file():
-        text = source.read_text(encoding="utf-8")
+        text = source.read_text(encoding="utf-8-sig", errors="replace")
         is_json = source.suffix == ".json"
         is_jsonl = source.suffix == ".jsonl"
     else:
@@ -88,32 +92,46 @@ def read_organisation_numbers(path: str | Path) -> list[str]:
 def profiles_from_bulk(path: str | Path, organisation_numbers: Iterable[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     requested = list(organisation_numbers)
     wanted = set(requested)
-    snapshot_sha256 = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    p = Path(path)
+    if not p.is_file():
+        candidates = [
+            Path(__file__).resolve().parents[2] / p.name,
+            Path(__file__).resolve().parents[2] / "signalpost-company-universe-2025.jsonl.gz",
+            Path(__file__).resolve().parents[2] / "brreg-enheter.csv",
+            Path.cwd() / p.name,
+        ]
+        for c in candidates:
+            if c.is_file():
+                p = c
+                break
+
+    snapshot_sha256 = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else "absent_snapshot"
     retrieved_at = utc_now()
     found: dict[str, dict[str, Any]] = {}
     scanned = 0
-    for profile in iter_bulk(path):
-        scanned += 1
-        org = profile["organisation_number"]
-        if org not in wanted:
-            continue
-        raw = profile.pop("raw", {})
-        profile["evidence"] = {
-            "registry": evidence(
-                "registry",
-                "available",
-                "official_registry_bulk",
-                "https://data.brreg.no/enhetsregisteret/api/enheter/lastned/csv",
-                value=raw,
-                retrieved_at=retrieved_at,
-                content_sha256=snapshot_sha256,
-                source_row_key=org,
-            ),
-            "accounting_obligation": accounting_obligation_assessment(profile),
-        }
-        found[org] = profile
-        if len(found) == len(wanted):
-            break
+    if p.is_file():
+        for profile in iter_bulk(p):
+            scanned += 1
+            org = profile["organisation_number"]
+            if org not in wanted:
+                continue
+            raw = profile.pop("raw", {})
+            profile["evidence"] = {
+                "registry": evidence(
+                    "registry",
+                    "available",
+                    "official_registry_bulk",
+                    "https://data.brreg.no/enhetsregisteret/api/enheter/lastned/csv",
+                    value=raw,
+                    retrieved_at=retrieved_at,
+                    content_sha256=snapshot_sha256,
+                    source_row_key=org,
+                ),
+                "accounting_obligation": accounting_obligation_assessment(profile),
+            }
+            found[org] = profile
+            if len(found) == len(wanted):
+                break
     missing = [org for org in requested if org not in found]
     if missing:
         for org in missing:
@@ -130,7 +148,7 @@ def profiles_from_bulk(path: str | Path, organisation_numbers: Iterable[str]) ->
                     f"https://data.brreg.no/enhetsregisteret/api/enheter/{org}",
                     headers={"Accept": "application/json", "User-Agent": "builderr-signalpost-poc/0.1 (+https://builderr.ai)"},
                 )
-                with urllib.request.urlopen(req, timeout=2.0) as resp:
+                with urllib.request.urlopen(req, timeout=5.0) as resp:
                     if resp.status == 200:
                         live_data = json.loads(resp.read().decode("utf-8", errors="replace"))
                         if isinstance(live_data, dict):
