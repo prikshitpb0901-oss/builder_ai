@@ -1,11 +1,11 @@
 {
-  "run_id": "run-1000-competition-v2",
-  "started_at": "2026-09-28T16:47:37.904372Z",
-  "completed_at": "2026-09-28T17:07:11.992921Z",
-  "expected_count": 1000,
-  "emitted_envelopes": 1000,
+  "run_id": "run-20260929074554",
+  "started_at": "2026-09-29T07:45:54.234447Z",
+  "completed_at": "2026-09-29T07:47:38.920095Z",
+  "expected_count": 100,
+  "emitted_envelopes": 100,
   "resumed_profiles": 0,
-  "profiles_fetched_this_run": 1000,
+  "profiles_fetched_this_run": 100,
   "modules": [
     "registry",
     "accounting_obligation",
@@ -18,15 +18,15 @@
   ],
   "registry": {
     "registry_snapshot_sha256": "1c89710e5b01f8617e86d09fbdff4a52f2f8dbbba297e74f7164b5984f5a0384",
-    "registry_rows_scanned": 410567,
-    "requested": 1000,
-    "selected": 1000
+    "registry_rows_scanned": 409260,
+    "requested": 100,
+    "selected": 100
   },
   "operations": {
-    "requests": 10620,
-    "bytes": 64982766,
-    "p50_ms": 1117,
-    "p95_ms": 2011
+    "requests": 1036,
+    "bytes": 2348159,
+    "p50_ms": 1378,
+    "p95_ms": 2114
   },
   "validation": {
     "passed": true,

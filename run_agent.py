@@ -10,6 +10,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+
+# Automatically detect and include .venv site-packages if available and not yet on path
+for site_pkg in (ROOT / ".venv").glob("**/site-packages"):
+    if site_pkg.is_dir() and str(site_pkg) not in sys.path:
+        sys.path.insert(0, str(site_pkg))
+
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
