@@ -138,7 +138,7 @@ def main() -> None:
     parser.add_argument("--report", "-r", default=None, help="Run report JSON")
     parser.add_argument("--run-id", "--run_id", default=None, help="Unique run identifier")
     parser.add_argument("--expected-count", "--expected_count", type=int, default=None, help="Expected number of organisations")
-    parser.add_argument("--workers", "-w", type=int, default=8)
+    parser.add_argument("--workers", "-w", type=int, default=16)
     parser.add_argument("--checkpoint-every", type=int, default=25)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--modules", default="registry,accounting_obligation,registry_live,financials,roles,group,locations,website")
