@@ -70,12 +70,37 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     overlap = sorted(set(core) & candidate_tokens)
     ratio = len(overlap) / len(set(core)) if core else 0.0
     reasons = []
-    parked_markers = (
+    FRAUD_AND_SCAM_MARKERS = (
+        # Online casinos / gambling / betting (common expired domain hijack)
+        "casino bonus", "nettcasino", "spilleautomater", "free spins",
+        "online casino", "best casino", "betting bonus", "slot machine",
+        "spill penger", "norske casino", "gambling", "oddsbonuser",
+        # Crypto / Forex / Get-rich scams
+        "crypto trading bot", "bitcoin investment", "automated wealth",
+        "passive income bot", "forex signals", "binary options",
+        "claim your reward", "connect your wallet", "airdrop claim",
+        # Phishing / Credential harvesting (BankID / Vipps / Posten imposter)
+        "enter your bankid", "verifiser din bankid", "bekreft ditt vipps",
+        "ditt vipps er sperret", "sikkerhetsvarsel bankid", "logg inn med bankid",
+        "pakkesporing gebyr", "tollgebyr betaling",
+        # Tech support / Scareware / Fake virus
+        "your computer is infected", "call microsoft support", "zeus virus",
+        "critical security alert", "threats detected on your pc",
+        "trojan detected", "security scan required",
+    )
+    PARKED_AND_PLACEHOLDER_MARKERS = (
         "domain is for sale", "domain for sale", "hugedomains", "parked at", "miss hosting",
         "her flytter snart en ny gjest", "has been informing visitors",
         "find the best information and most relevant links on all topics related to",
+        "kjøp dette domenet", "buy this domain", "domenet er parkert", "dette domenet er parkert",
+        "domeneshop parkering", "proisp parkering", "webhuset parkering",
+        "parked free, courtesy of", "parkingcrew", "bodis.com", "sedoparking",
+        "under construction", "site is under maintenance",
     )
     normalized_raw = unicodedata.normalize("NFKD", candidate_text).encode("ascii", "ignore").decode().casefold()
+    candidate_lower = candidate_text.lower()
+    detected_fraud = next((marker for marker in FRAUD_AND_SCAM_MARKERS if marker in normalized_raw or marker in candidate_lower), None)
+    detected_parked = next((marker for marker in PARKED_AND_PLACEHOLDER_MARKERS if marker in normalized_raw or marker in candidate_lower), None)
     homepage_token_sets = [set(_tokens(part)) for part in homepage_identity_parts if part]
     exact_homepage_name = bool(core and any(set(core).issubset(tokens) for tokens in homepage_token_sets))
     core_distinct = [t for t in core if t not in CORPORATE_MODIFIERS]
@@ -92,9 +117,12 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     exact_distinct_in_homepage = bool(core_distinct and any(core_distinct_set.issubset(tokens) for tokens in homepage_token_sets))
     substantive_homepage = len(str(value.get("main_text_excerpt") or "").strip()) >= 100
     is_business_sports_club = bool(re.search(r"(?:^|\s)B\.?\s*I\.?\s*L\.?(?:\s|$)", str(profile.get("name") or ""), re.I))
-    if any(marker in normalized_raw for marker in parked_markers):
+    if detected_fraud:
+        score = 0.0
+        reasons.append(f"fraud_or_scam_signature_detected: {detected_fraud}")
+    elif detected_parked:
         score = 0.1
-        reasons.append("captured page is a parked, for-sale, or generic hosting placeholder")
+        reasons.append(f"captured page is a parked, for-sale, or hosting placeholder: {detected_parked}")
     elif is_business_sports_club and "bedriftsidrett" not in normalized_candidate_text and "b i l" not in normalized_candidate_text:
         score = 0.3
         reasons.append("business sports-club entity points to the operating company's site without club evidence")
@@ -131,11 +159,18 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     else:
         score = 0.3
         reasons.append("registry-linked URL lacks strong exact-entity identity evidence")
-    status = "exact" if score >= 0.9 else "review" if score >= 0.8 else "related_or_uncertain"
+    if detected_fraud:
+        status = "quarantined_fraud"
+    elif detected_parked:
+        status = "quarantined_parked"
+    else:
+        status = "exact" if score >= 0.9 else "review" if score >= 0.8 else "related_or_uncertain"
     return {
         "status": status,
         "score": score,
         "publishable": status == "exact",
+        "is_fraud": bool(detected_fraud),
+        "is_parked": bool(detected_parked),
         "legal_name_tokens": core,
         "matched_tokens": overlap,
         "reasons": reasons,
@@ -197,6 +232,9 @@ def apply_website_identity_gate(profile: dict[str, Any], website: dict[str, Any]
         for item in social_assessments
         if assessment["publishable"] and item["publishable"]
     ]
+    if assessment.get("is_fraud"):
+        website["status"] = "blocked"
+        website["note"] = f"Fraudulent or malicious site quarantined: {assessment['reasons'][0]}"
     website["value"] = value
     return {
         "website": website,

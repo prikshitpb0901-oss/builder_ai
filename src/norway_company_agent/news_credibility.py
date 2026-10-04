@@ -55,6 +55,15 @@ BLACKLISTED_DOMAINS = {
     "newspunch.com", "thegatewaypundit.com", "zerohedge.com",
 }
 
+# Fraud, scam, and malicious phishing patterns in news headlines
+FRAUD_AND_SCAM_NEWS_PATTERNS = [
+    r"\b(?:crypto\s+giveaway|bitcoin\s+scam|free\s+tokens|claim\s+reward)\b",
+    r"\b(?:bankid\s+svindel|vipps\s+svindel|investeringssvindel|phishing\s+angrep)\b",
+    r"\b(?:pyramidespill|ponzi\s+scheme|get\s+rich\s+quick|t\.me\/|wa\.me\/)\b",
+    r"\b(?:hack\s+konto|passord\s+stjålet|sikkerhetshull\s+svindel)\b",
+    r"\b(?:fake\s+giveaway|airdrop\s+scam|wallet\s+drainer)\b",
+]
+
 # Sensationalist / clickbait markers in Norwegian & English
 CLICKBAIT_PATTERNS = [
     r"\bdu vil ikke tro\b",
@@ -188,6 +197,21 @@ def evaluate_news_credibility(
             "reasons": [f"Source domain {pub_domain} is on known disinformation/content-farm blacklist."],
             "evaluated_domain": pub_domain,
         }
+
+    # ── Fatal Fraud / Scam Headline Pattern Check ──
+    lower_title = str(title or "").lower()
+    for pattern in FRAUD_AND_SCAM_NEWS_PATTERNS:
+        match = re.search(pattern, lower_title)
+        if match:
+            fatal_flags.append(f"fraud_pattern_detected:{match.group(0)}")
+            return {
+                "credibility_score": 0.0,
+                "credibility_tier": "rejected",
+                "is_publishable": False,
+                "fatal_flags": fatal_flags,
+                "reasons": [f"News headline matched fraudulent or scam pattern: {match.group(0)}"],
+                "evaluated_domain": pub_domain,
+            }
 
     # ── 1. Publisher Trust (0.00–0.35) ──
     pub_lower = publisher_name.lower().strip()

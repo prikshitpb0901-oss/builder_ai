@@ -38,6 +38,38 @@ PRIORITY_TERMS = (
 )
 
 
+
+# Ensure global socket operations have a strict timeout to prevent indefinite hangs
+socket.setdefaulttimeout(10.0)
+
+KNOWN_FRAUD_OR_PARKED_DOMAINS = {
+    "sedoparking.com", "dan.com", "hugedomains.com", "afternic.com",
+    "bodis.com", "parkingcrew.net", "voodoo.com", "zeropark.com",
+    "undeveloped.com", "domainmarket.com", "buydomains.com",
+    "parked.com", "domainsponsor.com",
+}
+
+
+def _read_bounded_with_deadline(response: Any, max_bytes: int, deadline: float) -> bytes:
+    """Read bytes from response stream with strict byte limit and absolute wall-clock deadline."""
+    chunks = []
+    total = 0
+    while total <= max_bytes:
+        if time.monotonic() > deadline:
+            raise TimeoutError("Response read exceeded wall-clock deadline (tarpit defense)")
+        requested = min(16384, max_bytes + 1 - total)
+        chunk = response.read(requested)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if time.monotonic() > deadline:
+            raise TimeoutError("Response read exceeded wall-clock deadline (tarpit defense)")
+        if len(chunk) < requested:
+            break
+    return b"".join(chunks)
+
+
 def assert_public_url(url: str) -> None:
     parsed = urllib.parse.urlparse(url)
     host = (parsed.hostname or "").lower().rstrip(".")
@@ -45,6 +77,8 @@ def assert_public_url(url: str) -> None:
         raise ValueError("Only public HTTP(S) URLs are allowed")
     if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
         raise ValueError("Local hosts are blocked")
+    if parsed.port and parsed.port not in {80, 443, 8080, 8443}:
+        raise ValueError(f"Dangerous or non-standard port {parsed.port} is blocked")
     try:
         addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)}
     except socket.gaierror as exc:
@@ -55,9 +89,20 @@ def assert_public_url(url: str) -> None:
             raise ValueError("Private, loopback, link-local, multicast, and reserved addresses are blocked")
 
 
+def _registered_domain(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    ext = tldextract.extract(parsed.hostname or "")
+    return ext.top_domain_under_public_suffix
+
+
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    max_redirections = 5
+
     def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
         assert_public_url(newurl)
+        dest_domain = _registered_domain(newurl)
+        if dest_domain in KNOWN_FRAUD_OR_PARKED_DOMAINS:
+            raise ValueError(f"Redirect to known parked or fraudulent domain blocked: {dest_domain}")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -76,12 +121,6 @@ def normalize_homepage(value: str | None) -> str | None:
     return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path or "/", "", "", ""))
 
 
-def _registered_domain(url: str) -> str:
-    parsed = urllib.parse.urlparse(url)
-    ext = tldextract.extract(parsed.hostname or "")
-    return ext.top_domain_under_public_suffix
-
-
 def _robots_allowed(url: str, timeout: float) -> bool:
     assert_public_url(url)
     parsed = urllib.parse.urlparse(url)
@@ -90,14 +129,18 @@ def _robots_allowed(url: str, timeout: float) -> bool:
     parser.set_url(robots_url)
     try:
         request = urllib.request.Request(robots_url, headers={"User-Agent": USER_AGENT})
-        with SAFE_OPENER.open(request, timeout=timeout) as response:
-            parser.parse(response.read().decode("utf-8", errors="replace").splitlines())
+        fetch_timeout = min(timeout, 3.5)
+        deadline = time.monotonic() + fetch_timeout
+        with SAFE_OPENER.open(request, timeout=fetch_timeout) as response:
+            raw = _read_bounded_with_deadline(response, 65536, deadline)
+            parser.parse(raw.decode("utf-8", errors="replace").splitlines())
         return parser.can_fetch(USER_AGENT, url)
     except Exception:
         # An unavailable robots file is not permission to ignore explicit site terms; callers retain
         # the URL and can route uncertain domains to review. For this bounded homepage POC, allow one
         # ordinary GET when robots.txt is absent rather than crawl deeper.
         return True
+
 
 
 def _social_links(base_url: str, soup: BeautifulSoup) -> list[dict[str, str]]:
@@ -211,10 +254,11 @@ def _fetch_secondary_page(url: str, *, homepage_domain: str, timeout: float, max
     if not _robots_allowed(url, timeout):
         return None, [], 1, 0, 0, "robots.txt disallows page"
     started = time.monotonic()
+    deadline = started + timeout
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"})
     try:
         with SAFE_OPENER.open(request, timeout=timeout) as response:
-            raw = response.read(max_bytes + 1)
+            raw = _read_bounded_with_deadline(response, max_bytes + 1, deadline)
             elapsed = int((time.monotonic() - started) * 1000)
             final_url = response.geturl()
             if len(raw) > max_bytes or "html" not in response.headers.get("content-type", "").lower():
@@ -271,11 +315,12 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
     if not _robots_allowed(normalized, timeout):
         return evidence("website", "blocked", "registry_linked_company_website", normalized, note="robots.txt disallows this user agent"), {"requests": 1, "bytes": 0, "latencies_ms": []}
     started = time.monotonic()
+    deadline = started + timeout
     request = urllib.request.Request(normalized, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"})
     try:
         with SAFE_OPENER.open(request, timeout=timeout) as response:
             content_type = response.headers.get("content-type", "")
-            raw = response.read(max_bytes + 1)
+            raw = _read_bounded_with_deadline(response, max_bytes + 1, deadline)
             elapsed = int((time.monotonic() - started) * 1000)
             if len(raw) > max_bytes:
                 return evidence("website", "blocked", "registry_linked_company_website", normalized, note="Homepage exceeds byte limit"), {"requests": 2, "bytes": len(raw), "latencies_ms": [elapsed]}
@@ -283,6 +328,9 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
                 return evidence("website", "source_error", "registry_linked_company_website", normalized, note=f"Unsupported content type: {content_type}"), {"requests": 2, "bytes": len(raw), "latencies_ms": [elapsed]}
             final_url = response.geturl()
             assert_public_url(final_url)
+            final_domain = _registered_domain(final_url)
+            if final_domain in KNOWN_FRAUD_OR_PARKED_DOMAINS:
+                return evidence("website", "blocked", "registry_linked_company_website", final_url, note=f"Known domain parking or fraudulent domain blocked: {final_domain}"), {"requests": 2, "bytes": len(raw), "latencies_ms": [elapsed]}
         html = raw.decode("utf-8", errors="replace")
         soup = BeautifulSoup(html, "lxml")
         structured = extruct.extract(html, base_url=final_url, syntaxes=["json-ld", "microdata", "opengraph"])
@@ -345,10 +393,14 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
         elapsed = int((time.monotonic() - started) * 1000)
         status = "not_found" if exc.code in {404, 410} else "source_error"
         return evidence("website", status, "registry_linked_company_website", normalized, note=f"HTTP {exc.code}"), {"requests": 2, "bytes": 0, "latencies_ms": [elapsed]}
+    except TimeoutError as exc:
+        elapsed = int((time.monotonic() - started) * 1000)
+        return evidence("website", "source_error", "registry_linked_company_website", normalized, note="Connection timed out or tarpit detected"), {"requests": 2, "bytes": 0, "latencies_ms": [elapsed]}
     except urllib.error.URLError as exc:
-        if not supplied_scheme and normalized.startswith("https://"):
+        is_timeout = isinstance(getattr(exc, "reason", None), (TimeoutError, socket.timeout)) or "timed out" in str(getattr(exc, "reason", "")).lower()
+        if not supplied_scheme and normalized.startswith("https://") and not is_timeout:
             first_elapsed = int((time.monotonic() - started) * 1000)
-            record, metrics = fetch_website("http://" + supplied_url, timeout=timeout, max_bytes=max_bytes)
+            record, metrics = fetch_website("http://" + supplied_url, timeout=min(timeout, 4.0), max_bytes=max_bytes)
             metrics["requests"] += 2
             metrics["latencies_ms"].insert(0, first_elapsed)
             return record, metrics
@@ -357,3 +409,4 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
     except Exception as exc:
         elapsed = int((time.monotonic() - started) * 1000)
         return evidence("website", "source_error", "registry_linked_company_website", normalized, note=f"{type(exc).__name__}: {str(exc)[:180]}"), {"requests": 2, "bytes": 0, "latencies_ms": [elapsed]}
+

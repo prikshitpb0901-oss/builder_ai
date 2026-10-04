@@ -23,6 +23,11 @@ SCAM_AND_ABUSE_PATTERNS = [
     r"\b(?:t\.me\/|wa\.me\/|whatsapp:\s*\+)\b",
     # Phishing / Malicious links
     r"\b(?:claim\s+reward|connect\s+wallet|claim\s+bonus)\b",
+    # Norwegian credential theft / fraud
+    r"\b(?:bankid\s+svindel|vipps\s+svindel|logg\s+inn\s+bankid|bekreft\s+vipps)\b",
+    r"\b(?:tjen\s+penger\s+raskt|lån\s+uten\s+sikkerhet|pyramidespill)\b",
+    # Suspicious shorteners hiding actual targets
+    r"\b(?:bit\.ly|tinyurl\.com|is\.gd|cutt\.ly|rb\.gy)\b",
     # Recruitment fraud
     r"\b(?:pay\s+registration\s+fee|wire\s+money\s+for\s+equipment)\b",
     # Smear / Negative purpose / Parody accounts

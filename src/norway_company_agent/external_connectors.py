@@ -24,7 +24,61 @@ LEGAL_SUFFIXES = {
 }
 
 USER_AGENT = "Mozilla/5.0 (compatible; SignalpostResearchPOC/1.0; +https://builderr.ai)"
-_LI_LOCK = threading.Lock()
+_LI_SEMAPHORE = threading.Semaphore(4)
+
+
+class CircuitBreaker:
+    """Thread-safe circuit breaker preventing cascading hangs on unresponsive or tarpitting external endpoints."""
+
+    def __init__(self, failure_threshold: int = 3, cooldown_seconds: float = 20.0):
+        self.threshold = failure_threshold
+        self.cooldown = cooldown_seconds
+        self.failures = 0
+        self.opened_at = 0.0
+        self.lock = threading.Lock()
+
+    def is_available(self) -> bool:
+        with self.lock:
+            if self.failures >= self.threshold:
+                if time.monotonic() - self.opened_at < self.cooldown:
+                    return False
+                self.failures = self.threshold - 1
+            return True
+
+    def record_success(self) -> None:
+        with self.lock:
+            self.failures = 0
+
+    def record_failure(self) -> None:
+        with self.lock:
+            self.failures += 1
+            if self.failures >= self.threshold:
+                self.opened_at = time.monotonic()
+
+
+_LI_CIRCUIT = CircuitBreaker(failure_threshold=3, cooldown_seconds=20.0)
+_REVIEWS_CIRCUIT = CircuitBreaker(failure_threshold=3, cooldown_seconds=20.0)
+_JOBS_CIRCUIT = CircuitBreaker(failure_threshold=3, cooldown_seconds=20.0)
+
+
+def _read_bounded_with_deadline(response: Any, max_bytes: int, deadline: float) -> bytes:
+    """Read stream with size limit and hard wall-clock deadline."""
+    chunks = []
+    total = 0
+    while total <= max_bytes:
+        if time.monotonic() > deadline:
+            raise TimeoutError("Read exceeded deadline")
+        requested = min(16384, max_bytes + 1 - total)
+        chunk = response.read(requested)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if time.monotonic() > deadline:
+            raise TimeoutError("Read exceeded deadline")
+        if len(chunk) < requested:
+            break
+    return b"".join(chunks)
 
 
 def _normalize_name(value: str) -> str:
@@ -37,12 +91,12 @@ def _normalize_name(value: str) -> str:
     return " ".join(words)
 
 
-def discover_linkedin_company(company_name: str, org_number: str, timeout: float = 2.5) -> dict[str, Any] | None:
+def discover_linkedin_company(company_name: str, org_number: str, timeout: float = 2.0) -> dict[str, Any] | None:
     """Discover verified LinkedIn company profile via LinkedIn guest typeahead.
 
     Strict entity gate: requires exact normalized legal core match.
     """
-    if not company_name:
+    if not company_name or not _LI_CIRCUIT.is_available():
         return None
 
     legal_core = _normalize_name(company_name)
@@ -66,10 +120,12 @@ def discover_linkedin_company(company_name: str, org_number: str, timeout: float
                     "Accept-Language": "en-US,en;q=0.9,no;q=0.8",
                 },
             )
-            with _LI_LOCK:
+            deadline = time.monotonic() + timeout
+            with _LI_SEMAPHORE:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    raw = resp.read(500_000)
+                    raw = _read_bounded_with_deadline(resp, 200_000, deadline)
                     data = json.loads(raw.decode("utf-8", errors="replace"))
+            _LI_CIRCUIT.record_success()
 
             if not isinstance(data, list):
                 continue
@@ -121,7 +177,7 @@ def discover_linkedin_company(company_name: str, org_number: str, timeout: float
                     }
 
     except Exception:
-        pass
+        _LI_CIRCUIT.record_failure()
 
     return None
 
@@ -246,15 +302,17 @@ def discover_youtube_channel(
 
 def discover_customer_reviews(company_name: str, org_number: str, timeout: float = 2.0) -> dict[str, Any] | None:
     """Discover verified customer reviews and aggregate rating with exact-entity gate."""
-    if not company_name or not org_number:
+    if not company_name or not org_number or not _REVIEWS_CIRCUIT.is_available():
         return None
     try:
         from bs4 import BeautifulSoup
         clean_slug = _normalize_name(company_name).replace(" ", "-")
         url = f"https://www.fagfolkguiden.no/bedrift/{clean_slug}-{org_number}"
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"})
+        deadline = time.monotonic() + timeout
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read(500_000)
+            raw = _read_bounded_with_deadline(resp, 200_000, deadline)
+        _REVIEWS_CIRCUIT.record_success()
         soup = BeautifulSoup(raw, "html.parser")
         for node in soup.find_all("script", attrs={"type": "application/ld+json"}):
             try:
@@ -277,13 +335,13 @@ def discover_customer_reviews(company_name: str, org_number: str, timeout: float
                             "source": "fagfolkguiden_google_aggregate",
                         }
     except Exception:
-        pass
+        _REVIEWS_CIRCUIT.record_failure()
     return None
 
 
 def discover_linkedin_jobs(company_name: str, org_number: str, timeout: float = 2.0) -> list[dict[str, Any]]:
     """Discover verified LinkedIn guest job postings with company core name matching."""
-    if not company_name:
+    if not company_name or not _JOBS_CIRCUIT.is_available():
         return []
     try:
         clean = urllib.parse.quote(company_name.strip())
@@ -295,8 +353,10 @@ def discover_linkedin_jobs(company_name: str, org_number: str, timeout: float = 
                 "Accept-Language": "en-US,en;q=0.9,no;q=0.8",
             },
         )
+        deadline = time.monotonic() + timeout
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read(500_000)
+            raw = _read_bounded_with_deadline(resp, 200_000, deadline)
+        _JOBS_CIRCUIT.record_success()
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(raw, "html.parser")
         jobs = []
@@ -317,5 +377,6 @@ def discover_linkedin_jobs(company_name: str, org_number: str, timeout: float = 
                 })
         return jobs
     except Exception:
+        _JOBS_CIRCUIT.record_failure()
         return []
 

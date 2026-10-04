@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -58,8 +59,19 @@ def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
     url = f"https://news.google.com/rss/search?q={query}&hl=no&gl=NO&ceid=NO:no"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": NEWS_UA, "Accept": "application/rss+xml"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            raw = resp.read(2_000_000)
+        deadline = time.monotonic() + 4.0
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            chunks = []
+            tot = 0
+            while tot <= 500_000:
+                if time.monotonic() > deadline:
+                    break
+                ch = resp.read(min(16384, 500_001 - tot))
+                if not ch:
+                    break
+                chunks.append(ch)
+                tot += len(ch)
+            raw = b"".join(chunks)
         root = ET.fromstring(raw)
         retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         output, seen = [], set()
@@ -190,6 +202,8 @@ def main() -> None:
     operations = {"requests": 0, "bytes": 0, "latencies_ms": []}
 
     def enrich(profile: dict) -> tuple[dict, dict]:
+        started_mono = time.monotonic()
+        enrich_deadline = started_mono + 16.0
         try:
             records, metrics = fetch_official_modules(profile["organisation_number"], fetch_modules)
             profile["evidence"].update(records)
@@ -197,54 +211,60 @@ def main() -> None:
             if "website" in requested_modules:
                 website_record, website_metrics = fetch_website(profile.get("website"))
                 profile["evidence"]["website"] = apply_website_identity_gate(profile, website_record)["website"]
-            # Google News RSS enrichment (free, no API key, 5-layer fake news defense)
-            news_mentions = _fetch_google_news(profile, limit=5)
-            if news_mentions:
-                profile["news_mentions"] = news_mentions
-                # Verified Sentiment Integrity
-                sentiment_items = [
-                    {
-                        "id": m["id"],
-                        "organisation_number": profile["organisation_number"],
-                        "exact_entity": True,
-                        "source_class": "public_news",
-                        "source_url": m["source_url"],
-                        "retrieved_at": m["retrieved_at"],
-                        "evidence_span": m["text"],
-                        "content_sha256": hashlib.sha256(m["text"].encode()).hexdigest(),
-                        "text": m["text"],
-                        "label": "positive" if any(w in m["text"].lower() for w in ("vekst", "rekord", "overskudd", "kontrakt", "ansetter", "tildelt"))
-                                 else "negative" if any(w in m["text"].lower() for w in ("konkurs", "underskudd", "oppsigelse", "fall", "tap", "rettssak"))
-                                 else "neutral",
-                    }
-                    for m in news_mentions
-                ]
-                profile["sentiment"] = aggregate_company_sentiment(sentiment_items)
+            # Google News RSS enrichment (guarded by wall-clock deadline & 5-layer anti-fraud defense)
+            news_mentions = []
+            if time.monotonic() < enrich_deadline:
+                news_mentions = _fetch_google_news(profile, limit=5)
+                if news_mentions:
+                    profile["news_mentions"] = news_mentions
+                    # Verified Sentiment Integrity
+                    sentiment_items = [
+                        {
+                            "id": m["id"],
+                            "organisation_number": profile["organisation_number"],
+                            "exact_entity": True,
+                            "source_class": "public_news",
+                            "source_url": m["source_url"],
+                            "retrieved_at": m["retrieved_at"],
+                            "evidence_span": m["text"],
+                            "content_sha256": hashlib.sha256(m["text"].encode()).hexdigest(),
+                            "text": m["text"],
+                            "label": "positive" if any(w in m["text"].lower() for w in ("vekst", "rekord", "overskudd", "kontrakt", "ansetter", "tildelt"))
+                                     else "negative" if any(w in m["text"].lower() for w in ("konkurs", "underskudd", "oppsigelse", "fall", "tap", "rettssak"))
+                                     else "neutral",
+                        }
+                        for m in news_mentions
+                    ]
+                    profile["sentiment"] = aggregate_company_sentiment(sentiment_items)
 
             # External Footprint Connectors (LinkedIn, YouTube, Reviews, Jobs)
             website_val = (profile.get("evidence", {}).get("website", {}) or {}).get("value") or {}
             website_domain = website_val.get("registered_domain")
 
             external_footprint = {}
-            linkedin_match = discover_linkedin_company(profile.get("name") or "", profile["organisation_number"])
-            if linkedin_match:
-                external_footprint["linkedin"] = linkedin_match
+            if time.monotonic() < enrich_deadline:
+                linkedin_match = discover_linkedin_company(profile.get("name") or "", profile["organisation_number"])
+                if linkedin_match:
+                    external_footprint["linkedin"] = linkedin_match
 
-            youtube_match = discover_youtube_channel(profile.get("name") or "", profile["organisation_number"], website_domain)
-            if youtube_match:
-                external_footprint["youtube"] = youtube_match
+            if time.monotonic() < enrich_deadline:
+                youtube_match = discover_youtube_channel(profile.get("name") or "", profile["organisation_number"], website_domain)
+                if youtube_match:
+                    external_footprint["youtube"] = youtube_match
 
             # Customer Reviews (Fagfolkguiden / Google Aggregate)
-            reviews_match = discover_customer_reviews(profile.get("name") or "", profile["organisation_number"])
-            if reviews_match:
-                external_footprint["reviews"] = reviews_match
-                profile["customer_reviews"] = reviews_match
+            if time.monotonic() < enrich_deadline:
+                reviews_match = discover_customer_reviews(profile.get("name") or "", profile["organisation_number"])
+                if reviews_match:
+                    external_footprint["reviews"] = reviews_match
+                    profile["customer_reviews"] = reviews_match
 
             # Hiring / Job Postings (LinkedIn Guest Jobs)
-            jobs_match = discover_linkedin_jobs(profile.get("name") or "", profile["organisation_number"])
-            if jobs_match:
-                external_footprint["jobs"] = jobs_match
-                profile["jobs"] = jobs_match
+            if time.monotonic() < enrich_deadline:
+                jobs_match = discover_linkedin_jobs(profile.get("name") or "", profile["organisation_number"])
+                if jobs_match:
+                    external_footprint["jobs"] = jobs_match
+                    profile["jobs"] = jobs_match
 
             # Verified Website Social & Career Channels (exact entity publishable)
             website_publishable = bool((website_val.get("identity_assessment") or {}).get("publishable"))

@@ -1592,5 +1592,66 @@ class SocialSecurityTests(unittest.TestCase):
         self.assertEqual(len(clean), 0)
 
 
+class FraudAndSecurityDefenseTests(unittest.TestCase):
+    def test_fraudulent_casino_and_crypto_sites_are_quarantined(self):
+        casino_site = {
+            "organisation_number": "912345678",
+            "name": "Norsk Byggdrift AS",
+            "evidence": {"website": {"status": "available", "value": {
+                "title": "Norsk Byggdrift AS - Best Online Casino & Free Spins",
+                "main_text_excerpt": "Spill på nettcasino og få 100 free spins bonus i dag på spilleautomater!",
+            }}},
+        }
+        assessment = assess_website_identity(casino_site)
+        self.assertFalse(assessment["publishable"])
+        self.assertEqual(assessment["status"], "quarantined_fraud")
+        self.assertEqual(assessment["score"], 0.0)
+        self.assertTrue(assessment["is_fraud"])
+
+    def test_dangerous_non_web_ports_are_blocked(self):
+        for bad_url in ("http://example.com:22/", "http://example.com:25/", "http://example.com:3389/"):
+            with self.assertRaises(ValueError):
+                assert_public_url(bad_url)
+
+    def test_fake_news_scam_pattern_rejected(self):
+        res = evaluate_news_credibility(
+            title="Equinor ASA lanserer crypto giveaway med garantert avkastning",
+            publisher_name="NRK",
+            publisher_url="https://nrk.no",
+            source_link="https://nrk.no/artikkel/123",
+            published_at="2026-01-01T00:00:00Z",
+            company_name="Equinor ASA",
+        )
+        self.assertFalse(res["is_publishable"])
+        self.assertEqual(res["credibility_score"], 0.0)
+        self.assertTrue(any("fraud_pattern_detected" in f for f in res["fatal_flags"]))
+
+    def test_tarpit_read_bounded_with_deadline(self):
+        import time
+        from norway_company_agent.website import _read_bounded_with_deadline
+
+        class TarpitStream:
+            def read(self, size):
+                time.sleep(0.05)
+                return b"A" * size
+
+        tarpit = TarpitStream()
+        with self.assertRaises(TimeoutError):
+            _read_bounded_with_deadline(tarpit, 10000, time.monotonic() + 0.02)
+
+    def test_apply_website_identity_gate_blocks_fraud_evidence(self):
+        website = evidence("website", "available", "company_site", "https://scam.test", value={
+            "title": "Crypto trading bot login with bankid",
+            "main_text_excerpt": "Automated wealth bitcoin investment connect your wallet",
+            "social_links": [{"platform": "linkedin", "url": "https://linkedin.com/company/scam"}],
+        })
+        profile = {"organisation_number": "912345678", "name": "Scam Target AS", "evidence": {}}
+        result = apply_website_identity_gate(profile, website)
+        self.assertFalse(result["assessment"]["publishable"])
+        self.assertEqual(result["website"]["status"], "blocked")
+        self.assertTrue("Fraudulent or malicious site quarantined" in result["website"]["note"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
