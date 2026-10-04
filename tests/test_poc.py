@@ -1652,6 +1652,68 @@ class FraudAndSecurityDefenseTests(unittest.TestCase):
         self.assertTrue("Fraudulent or malicious site quarantined" in result["website"]["note"])
 
 
+class EvaluatorQualificationContractTests(unittest.TestCase):
+    def test_multi_year_financial_summary_chronology_and_trend(self):
+        """Regression test for Evaluator Priority Finding #1:
+        Ensure multi-year financials pick latest filed year (not earliest) and compute YoY forward."""
+        from norway_company_agent.research import synthesize_company_profile
+        profile = {
+            "name": "UP HELSE AS",
+            "organisation_number": "828652982",
+            "legal_form": "AS",
+            "evidence": {
+                "financials": {
+                    "value": {
+                        "records": [
+                            {"period": {"fraDato": "2023-01-01", "tilDato": "2023-12-31"}, "revenue": 4938525, "annual_result": 100000},
+                            {"period": {"fraDato": "2024-01-01", "tilDato": "2024-12-31"}, "revenue": 5593203, "annual_result": 200000},
+                            {"period": {"fraDato": "2025-01-01", "tilDato": "2025-12-31"}, "revenue": 6203680, "annual_result": 300000},
+                        ]
+                    }
+                }
+            }
+        }
+        summary = synthesize_company_profile(profile)
+        fin_text = summary["financial_status"]
+        self.assertIn("2025", fin_text)
+        self.assertIn("6,203,680 NOK", fin_text)
+        self.assertIn("+10.9% YoY vs 2024", fin_text)
+        self.assertNotIn("-11.7%", fin_text)
+
+    def test_terminal_envelope_includes_changes_contract_field(self):
+        """Regression test for Evaluator Priority Finding #2:
+        Ensure terminal envelope explicitly includes the changes contract field."""
+        profile = {
+            "organisation_number": "923609016",
+            "changes": [{"field": "employees", "old_value": 10, "new_value": 15}],
+            "evidence": {
+                "registry": evidence("registry", "available", "official", "https://example.test", content_sha256="a" * 64),
+            },
+        }
+        envelope = terminal_envelope(profile, run_id="test-run", modules=["registry"], started_at="2026-01-01T00:00:00Z", completed_at="2026-01-01T00:01:00Z")
+        self.assertIn("changes", envelope)
+        self.assertEqual(len(envelope["changes"]), 1)
+        self.assertEqual(envelope["changes"][0]["field"], "employees")
+
+    def test_differential_refresh_and_what_changed_synthesis(self):
+        """Ensure diff_profile detects modifications and reflects them in what_changed."""
+        from norway_company_agent.research import synthesize_company_profile
+        old_profile = {"organisation_number": "912345678", "name": "Old Name AS", "employees": 5}
+        new_profile = {
+            "organisation_number": "912345678",
+            "name": "New Name AS",
+            "employees": 8,
+            "evidence": {"registry": evidence("registry", "available", "official", "https://example.test", content_sha256="b" * 64)},
+        }
+        changes = diff_profile(old_profile, new_profile)
+        self.assertTrue(len(changes) >= 2)
+        new_profile["changes"] = changes
+        summary = synthesize_company_profile(new_profile)
+        self.assertIn("what_changed", summary)
+        self.assertIn("detected change(s) since prior run", summary["what_changed"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

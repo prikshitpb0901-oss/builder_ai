@@ -23,6 +23,7 @@ from norway_company_agent.batch import profile_complete_for_modules, profiles_fr
 from norway_company_agent.evidence import utc_now  # noqa: E402
 from norway_company_agent.identity import apply_website_identity_gate  # noqa: E402
 from norway_company_agent.official import fetch_official_modules  # noqa: E402
+from norway_company_agent.refresh import diff_profile  # noqa: E402
 from norway_company_agent.research import synthesize_company_profile  # noqa: E402
 from norway_company_agent.website import fetch_website  # noqa: E402
 
@@ -155,6 +156,7 @@ def main() -> None:
     parser.add_argument("--workers", "-w", type=int, default=16)
     parser.add_argument("--checkpoint-every", type=int, default=25)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--previous-profiles", "--refresh-from", "--prior-profiles", dest="previous_profiles", default=None, help="Prior run profiles JSONL to compute differential changes (refresh)")
     parser.add_argument("--modules", default="registry,accounting_obligation,registry_live,financials,roles,group,locations,website")
     args = parser.parse_args()
 
@@ -200,6 +202,19 @@ def main() -> None:
     requested_modules = [item.strip() for item in args.modules.split(",") if item.strip()]
     fetch_modules = set(requested_modules) - {"registry", "accounting_obligation", "website"}
     operations = {"requests": 0, "bytes": 0, "latencies_ms": []}
+
+    prior_profiles_map: dict[str, dict] = {}
+    if args.previous_profiles and Path(args.previous_profiles).is_file():
+        try:
+            prior_rows = [
+                json.loads(line)
+                for line in Path(args.previous_profiles).read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            prior_profiles_map = {r["organisation_number"]: r for r in prior_rows if "organisation_number" in r}
+            print(f"[INFO] Loaded {len(prior_profiles_map)} prior profiles for differential refresh evaluation.")
+        except Exception as exc:
+            print(f"[WARN] Failed to load previous profiles from {args.previous_profiles}: {exc}", file=sys.stderr)
 
     def enrich(profile: dict) -> tuple[dict, dict]:
         started_mono = time.monotonic()
@@ -327,6 +342,17 @@ def main() -> None:
             if external_footprint:
                 profile["external_footprint"] = external_footprint
 
+            # Differential change detection (Refresh evaluation)
+            org_num = profile.get("organisation_number")
+            if prior_profiles_map and org_num in prior_profiles_map:
+                try:
+                    profile["changes"] = diff_profile(prior_profiles_map[org_num], profile)
+                except Exception as diff_err:
+                    print(f"[WARN] Failed to diff profile {org_num}: {diff_err}", file=sys.stderr)
+                    profile["changes"] = []
+            else:
+                profile.setdefault("changes", [])
+
             profile["summary"] = synthesize_company_profile(profile)
             external_requests = 5  # news RSS + linkedin typeahead + youtube + reviews + jobs
             metric = {
@@ -413,6 +439,11 @@ def main() -> None:
         "modules": requested_modules,
         "registry": registry_metadata,
         "operations": operations,
+        "refresh": {
+            "prior_profiles_provided": bool(prior_profiles_map),
+            "changes_detected": sum(len(p.get("changes", [])) for p in ordered_profiles),
+            "profiles_with_changes": sum(1 for p in ordered_profiles if p.get("changes")),
+        },
         "validation": validation,
     }
     report_path = Path(args.report)

@@ -249,6 +249,7 @@ def terminal_envelope(
         "started_at": started_at,
         "completed_at": completed_at,
         "modules": module_states,
+        "changes": profile.get("changes", []),
         "profile": profile,
     }
 

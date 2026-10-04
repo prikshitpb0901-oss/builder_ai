@@ -274,6 +274,7 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     # 2. Financial and operational status
     fin_val = (evidence.get("financials", {}) or {}).get("value") or {}
     raw_records = fin_val.get("records") or []
+    records = []
     if raw_records:
         records = sorted(raw_records, key=_record_end_date)
         latest = records[-1]
@@ -399,10 +400,20 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     else:
         reviews_status = "No public customer review aggregations verified."
 
+    # 10. What changed (explicit rubric requirement)
+    changes = profile.get("changes") or []
+    if changes:
+        what_changed = f"{len(changes)} detected change(s) since prior run: " + "; ".join(
+            f"{c['field']} ({c.get('old_value')} -> {c.get('new_value')})" for c in changes[:3]
+        )
+    else:
+        what_changed = "No material changes detected since prior snapshot."
+
     return {
         "what_the_company_does": what_it_does,
         "financial_status": financial_status,
         "leadership_status": leadership_status,
+        "what_changed": what_changed,
         "media_coverage": media_coverage,
         "digital_footprint": digital_footprint,
         "hiring_status": hiring_status,
