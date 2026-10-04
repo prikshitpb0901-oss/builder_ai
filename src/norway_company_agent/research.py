@@ -16,6 +16,13 @@ def _claim(label: str, value: Any, record: dict[str, Any], classification: str) 
     }
 
 
+def _record_end_date(rec: dict[str, Any]) -> str:
+    period = rec.get("period")
+    if isinstance(period, dict):
+        return str(period.get("tilDato") or "")
+    return str(period or "")
+
+
 def answer_profile(row: dict[str, Any], question: str) -> dict[str, Any]:
     """Deterministic retrieval/answer layer; it never invents a missing field."""
     q = question.casefold()
@@ -41,7 +48,7 @@ def answer_profile(row: dict[str, Any], question: str) -> dict[str, Any]:
     if all_topics or any(term in q for term in financial_terms):
         records = (financial.get("value") or {}).get("records") or []
         if records:
-            latest = records[0]
+            latest = sorted(records, key=_record_end_date)[-1]
             for label, key in (
                 ("Reporting period", "period"),
                 ("Revenue", "revenue"),
@@ -110,7 +117,7 @@ UNSUPPORTED_SCREEN_TERMS = {
 
 def _latest_financial(row: dict[str, Any]) -> dict[str, Any]:
     records = ((row.get("evidence", {}).get("financials", {}).get("value") or {}).get("records") or [])
-    return records[0] if records else {}
+    return sorted(records, key=_record_end_date)[-1] if records else {}
 
 
 def _numeric_operator(phrase: str) -> str:
@@ -266,9 +273,10 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
     # 2. Financial and operational status
     fin_val = (evidence.get("financials", {}) or {}).get("value") or {}
-    records = fin_val.get("records") or []
-    if records:
-        latest = records[0]
+    raw_records = fin_val.get("records") or []
+    if raw_records:
+        records = sorted(raw_records, key=_record_end_date)
+        latest = records[-1]
         curr = latest.get("currency") or "NOK"
         rev = latest.get("revenue")
         profit = latest.get("annual_result")
@@ -297,7 +305,7 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
         # Multi-year revenue trend if prior account year available
         if len(records) >= 2 and rev_num is not None:
-            prior = records[1]
+            prior = records[-2]
             try:
                 prior_rev = float(prior.get("revenue")) if prior.get("revenue") is not None else None
             except (ValueError, TypeError):
