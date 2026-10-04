@@ -47,12 +47,13 @@ if __name__ == "__main__":
 
     if not org_flag_present:
         org_candidates = [
+            ROOT / "smoke-100.jsonl",
             ROOT / "batch-100.jsonl",
             ROOT / "entry-companies.jsonl",
-            ROOT / "smoke-companies.jsonl",
+            Path.cwd() / "smoke-100.jsonl",
             Path.cwd() / "batch-100.jsonl",
         ]
-        chosen_orgs = next((str(p) for p in org_candidates if p.exists()), str(ROOT / "batch-100.jsonl"))
+        chosen_orgs = next((str(p) for p in org_candidates if p.exists()), str(ROOT / "smoke-100.jsonl"))
         args.extend(["--organisations", chosen_orgs])
 
     bulk_flag_present = any(arg in args for arg in ("--bulk", "-b"))
