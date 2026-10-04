@@ -52,7 +52,9 @@ def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
     name = profile.get("name", "")
     if not name:
         return []
-    query = urllib.parse.quote(f'"{name}" when:2y')
+    clean_name = re.sub(r"\b(AS|ASA|ENK|ANS|DA|NUF|BA|SA)\b", "", name, flags=re.I).strip()
+    query_term = f'"{clean_name}" when:2y' if clean_name else f'"{name}" when:2y'
+    query = urllib.parse.quote(query_term)
     url = f"https://news.google.com/rss/search?q={query}&hl=no&gl=NO&ceid=NO:no"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": NEWS_UA, "Accept": "application/rss+xml"})
@@ -243,6 +245,64 @@ def main() -> None:
             if jobs_match:
                 external_footprint["jobs"] = jobs_match
                 profile["jobs"] = jobs_match
+
+            # Verified Website Social & Career Channels (exact entity publishable)
+            website_publishable = bool((website_val.get("identity_assessment") or {}).get("publishable"))
+            if website_publishable:
+                for soc in website_val.get("social_links") or []:
+                    plat = soc.get("platform")
+                    soc_url = soc.get("url")
+                    if plat and soc_url:
+                        if plat == "linkedin" and "linkedin" not in external_footprint:
+                            external_footprint["linkedin"] = {
+                                "platform": "linkedin",
+                                "organisation_number": profile["organisation_number"],
+                                "display_name": profile.get("name"),
+                                "profile_url": soc_url,
+                                "exact_entity": True,
+                                "match_type": "verified_website_social_link",
+                                "source": "verified_website",
+                            }
+                        elif plat == "youtube" and "youtube" not in external_footprint:
+                            external_footprint["youtube"] = {
+                                "platform": "youtube",
+                                "organisation_number": profile["organisation_number"],
+                                "channel_name": profile.get("name"),
+                                "channel_url": soc_url,
+                                "exact_entity": True,
+                                "source": "verified_website",
+                            }
+                        elif plat not in external_footprint:
+                            external_footprint[plat] = {
+                                "platform": plat,
+                                "profile_url": soc_url,
+                                "exact_entity": True,
+                                "source": "verified_website",
+                            }
+                if "jobs" not in external_footprint and website_val.get("hiring_links"):
+                    site_jobs = [
+                        {
+                            "title": "Career / Job Posting",
+                            "company": profile.get("name"),
+                            "location": profile.get("municipality") or "Norway",
+                            "job_url": h_url,
+                        }
+                        for h_url in website_val.get("hiring_links")[:3]
+                    ]
+                    external_footprint["jobs"] = site_jobs
+                    profile["jobs"] = site_jobs
+
+                site_url = website_val.get("final_url") or profile.get("website")
+                if site_url and "website" not in external_footprint:
+                    external_footprint["website"] = {
+                        "platform": "company_site",
+                        "url": site_url,
+                        "exact_entity": True,
+                        "source": "official_registry_and_verified_site",
+                    }
+
+            if news_mentions:
+                external_footprint["news"] = news_mentions
 
             if external_footprint:
                 profile["external_footprint"] = external_footprint

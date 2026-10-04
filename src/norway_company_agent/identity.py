@@ -10,6 +10,10 @@ LEGAL_AND_GENERIC = {
     "as", "asa", "ans", "da", "enk", "iks", "sa", "sam", "sti", "stiftelsen",
     "nuf", "ab", "b", "v", "limited", "ltd", "inc", "plc", "the", "og", "and",
 }
+CORPORATE_MODIFIERS = {
+    "holding", "eiendom", "eiendommer", "invest", "drift", "utvikling",
+    "forvaltning", "group", "gruppen", "norge", "norway", "avd", "avdeling", "vgs", "filial",
+}
 
 
 def _tokens(value: Any) -> list[str]:
@@ -74,6 +78,18 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     normalized_raw = unicodedata.normalize("NFKD", candidate_text).encode("ascii", "ignore").decode().casefold()
     homepage_token_sets = [set(_tokens(part)) for part in homepage_identity_parts if part]
     exact_homepage_name = bool(core and any(set(core).issubset(tokens) for tokens in homepage_token_sets))
+    core_distinct = [t for t in core if t not in CORPORATE_MODIFIERS]
+    core_distinct_set = set(core_distinct)
+    hostname_clean = hostname.removeprefix("www.").casefold()
+    hostname_tokens = _tokens(hostname_clean)
+    hostname_compact = "".join(hostname_tokens)
+    req_url = str(value.get("requested_url") or website.get("source_url") or "")
+    req_host = (urllib.parse.urlparse(req_url).hostname or "").removeprefix("www.").casefold()
+    req_host_compact = "".join(_tokens(req_host))
+    core_compact = "".join(core)
+    distinct_compact = "".join(core_distinct)
+    title_tokens = _tokens(value.get("title"))
+    exact_distinct_in_homepage = bool(core_distinct and any(core_distinct_set.issubset(tokens) for tokens in homepage_token_sets))
     substantive_homepage = len(str(value.get("main_text_excerpt") or "").strip()) >= 100
     is_business_sports_club = bool(re.search(r"(?:^|\s)B\.?\s*I\.?\s*L\.?(?:\s|$)", str(profile.get("name") or ""), re.I))
     if any(marker in normalized_raw for marker in parked_markers):
@@ -88,9 +104,24 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     elif len(core) >= 2 and exact_homepage_name:
         score = 0.95
         reasons.append("all normalized legal-name tokens appear together in homepage identity evidence")
-    elif len(core) == 1 and exact_homepage_name and substantive_homepage:
+    elif len(core) == 1 and exact_homepage_name and (substantive_homepage or core[0] in hostname_tokens or core[0] in hostname_compact):
         score = 0.95
-        reasons.append("single distinctive legal-name token appears in homepage identity evidence with substantive content")
+        reasons.append("single distinctive legal-name token appears in homepage identity evidence and domain")
+    elif core_distinct and len(core_distinct) >= 2 and exact_distinct_in_homepage and (distinct_compact in hostname_compact or hostname_compact in distinct_compact or any(t in hostname_tokens for t in core_distinct)):
+        score = 0.95
+        reasons.append("distinctive corporate name tokens match homepage and domain evidence")
+    elif core_distinct and len(core_distinct) >= 2 and (distinct_compact in hostname_compact or core_distinct_set.issubset(set(hostname_tokens))):
+        score = 0.95
+        reasons.append("distinctive corporate name tokens directly match domain hostname")
+    elif len(core_distinct) == 1 and len(core_distinct[0]) >= 4 and (core_distinct[0] in hostname_tokens or core_distinct[0] in hostname_compact) and (core_distinct[0] in title_tokens):
+        score = 0.95
+        reasons.append("distinctive corporate brand token matches domain and homepage title")
+    elif core_compact and len(core_compact) >= 6 and (core_compact in hostname_compact or hostname_compact.startswith(core_compact)):
+        score = 0.95
+        reasons.append("normalized legal name core directly matches domain hostname")
+    elif core_compact and len(core_compact) >= 5 and (core_compact in req_host_compact or req_host_compact.startswith(core_compact)):
+        score = 0.95
+        reasons.append("registry-linked domain registered by entity matches corporate core")
     elif ratio >= 0.75 and len(overlap) >= 2:
         score = 0.85
         reasons.append("most legal-name tokens appear, but exact identity is incomplete")
@@ -120,9 +151,17 @@ def assess_social_identity(profile: dict[str, Any], link: dict[str, str]) -> dic
     matched = [token for token in core if token in handle_compact]
     core_compact = "".join(core)
     ratio = len(set(matched)) / len(set(core)) if core else 0.0
+    web_val = (profile.get("evidence", {}).get("website", {}) or {}).get("value") or {}
+    web_domain = web_val.get("registered_domain") or urllib.parse.urlparse(web_val.get("final_url") or "").hostname or ""
+    dom_tokens = _tokens(web_domain.removeprefix("www."))
+    dom_compact = "".join(dom_tokens)
+
     if core_compact and core_compact in handle_compact:
         score = 0.98
         reason = "normalized legal-name sequence appears in the social handle"
+    elif dom_compact and len(dom_compact) >= 5 and dom_compact in handle_compact:
+        score = 0.95
+        reason = "social handle matches verified company website domain"
     elif len(core) == 1 and matched:
         score = 0.95
         reason = "single distinctive legal-name token appears in the social handle"

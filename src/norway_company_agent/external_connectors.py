@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
+import time
 import unicodedata
 import urllib.parse
 import urllib.request
@@ -22,6 +24,7 @@ LEGAL_SUFFIXES = {
 }
 
 USER_AGENT = "Mozilla/5.0 (compatible; SignalpostResearchPOC/1.0; +https://builderr.ai)"
+_LI_LOCK = threading.Lock()
 
 
 def _normalize_name(value: str) -> str:
@@ -34,7 +37,7 @@ def _normalize_name(value: str) -> str:
     return " ".join(words)
 
 
-def discover_linkedin_company(company_name: str, org_number: str, timeout: float = 6.0) -> dict[str, Any] | None:
+def discover_linkedin_company(company_name: str, org_number: str, timeout: float = 2.5) -> dict[str, Any] | None:
     """Discover verified LinkedIn company profile via LinkedIn guest typeahead.
 
     Strict entity gate: requires exact normalized legal core match.
@@ -46,60 +49,76 @@ def discover_linkedin_company(company_name: str, org_number: str, timeout: float
     if not legal_core:
         return None
 
-    # Query with the core name or clean name
-    clean_query = urllib.parse.quote(company_name.strip())
-    url = f"https://www.linkedin.com/jobs-guest/api/typeaheadHits?typeaheadType=COMPANY&query={clean_query}"
+    queries = [company_name.strip()]
+    if legal_core and legal_core.casefold() != company_name.strip().casefold():
+        queries.append(legal_core)
 
     try:
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json",
-                "Accept-Language": "en-US,en;q=0.9,no;q=0.8",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read(500_000)
-            data = json.loads(raw.decode("utf-8", errors="replace"))
+        for q_idx, query_candidate in enumerate(queries):
+            clean_query = urllib.parse.quote(query_candidate)
+            url = f"https://www.linkedin.com/jobs-guest/api/typeaheadHits?typeaheadType=COMPANY&query={clean_query}"
 
-        if not isinstance(data, list):
-            return None
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json",
+                    "Accept-Language": "en-US,en;q=0.9,no;q=0.8",
+                },
+            )
+            with _LI_LOCK:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    raw = resp.read(500_000)
+                    data = json.loads(raw.decode("utf-8", errors="replace"))
 
-        # Look for exact core match
-        for item in data:
-            if item.get("type") != "COMPANY" or not item.get("id"):
+            if not isinstance(data, list):
                 continue
-            display_name = str(item.get("displayName") or "")
-            candidate_core = _normalize_name(display_name)
 
-            if candidate_core == legal_core:
-                company_id = str(item["id"])
-                # Generate clean canonical company slug / search URL
-                slug = re.sub(r"[^a-z0-9\-]+", "-", display_name.lower()).strip("-")
-                canonical_url = f"https://www.linkedin.com/company/{slug}" if slug else f"https://www.linkedin.com/company/{company_id}"
-
-                # Security & authenticity screening
-                sec = verify_social_channel_security(
-                    platform="linkedin",
-                    channel_or_profile_name=display_name,
-                    target_url=canonical_url,
-                    company_name=company_name,
-                )
-                if not sec["is_safe"]:
+            # Look for exact core match
+            for item in data:
+                if item.get("type") != "COMPANY" or not item.get("id"):
                     continue
+                display_name = str(item.get("displayName") or "")
+                candidate_core = _normalize_name(display_name)
 
-                return {
-                    "platform": "linkedin",
-                    "organisation_number": str(org_number),
-                    "linkedin_company_id": company_id,
-                    "display_name": display_name,
-                    "profile_url": canonical_url,
-                    "exact_entity": True,
-                    "match_type": "exact_legal_core",
-                    "source": "linkedin_guest_api",
-                    "security_assessment": sec,
-                }
+                if candidate_core == legal_core:
+                    # Specificity guard for secondary core query: require multi-word or len >= 6 or norwegian chars
+                    if q_idx > 0:
+                        words = legal_core.split()
+                        is_specific = (
+                            len(words) >= 2
+                            or len(legal_core) >= 6
+                            or any(ch in company_name.lower() for ch in ("æ", "ø", "å"))
+                        )
+                        if not is_specific:
+                            continue
+
+                    company_id = str(item["id"])
+                    # Generate clean canonical company slug / search URL
+                    slug = re.sub(r"[^a-z0-9\-]+", "-", display_name.lower()).strip("-")
+                    canonical_url = f"https://www.linkedin.com/company/{slug}" if slug else f"https://www.linkedin.com/company/{company_id}"
+
+                    # Security & authenticity screening
+                    sec = verify_social_channel_security(
+                        platform="linkedin",
+                        channel_or_profile_name=display_name,
+                        target_url=canonical_url,
+                        company_name=company_name,
+                    )
+                    if not sec["is_safe"]:
+                        continue
+
+                    return {
+                        "platform": "linkedin",
+                        "organisation_number": str(org_number),
+                        "linkedin_company_id": company_id,
+                        "display_name": display_name,
+                        "profile_url": canonical_url,
+                        "exact_entity": True,
+                        "match_type": "exact_legal_core",
+                        "source": "linkedin_guest_api",
+                        "security_assessment": sec,
+                    }
 
     except Exception:
         pass

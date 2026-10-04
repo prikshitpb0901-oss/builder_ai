@@ -356,12 +356,26 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     footprint = profile.get("external_footprint") or {}
     social_links = (evidence.get("website", {}).get("value") or {}).get("social_links") or []
     footprint_items = []
+    seen_platforms = set()
     if "linkedin" in footprint:
-        footprint_items.append(f"LinkedIn ({footprint['linkedin'].get('display_name')})")
+        li_label = footprint["linkedin"].get("display_name") or footprint["linkedin"].get("profile_url") or "Profile"
+        footprint_items.append(f"LinkedIn ({li_label})")
+        seen_platforms.add("linkedin")
     if "youtube" in footprint:
-        footprint_items.append(f"YouTube ({footprint['youtube'].get('channel_name')})")
+        yt_label = footprint["youtube"].get("channel_name") or footprint["youtube"].get("channel_url") or "Channel"
+        footprint_items.append(f"YouTube ({yt_label})")
+        seen_platforms.add("youtube")
     for s in social_links:
-        footprint_items.append(f"{s.get('platform', 'Social').title()} ({s.get('url')})")
+        plat = str(s.get("platform") or "Social").lower()
+        if plat not in seen_platforms:
+            footprint_items.append(f"{plat.title()} ({s.get('url')})")
+            seen_platforms.add(plat)
+    for plat_key, plat_val in footprint.items():
+        if plat_key not in ("linkedin", "youtube", "jobs", "reviews") and plat_key not in seen_platforms and isinstance(plat_val, dict):
+            url = plat_val.get("profile_url") or plat_val.get("url")
+            if url:
+                footprint_items.append(f"{plat_key.title()} ({url})")
+                seen_platforms.add(plat_key)
 
     if footprint_items:
         digital_footprint = f"Verified digital footprint on: {', '.join(footprint_items)}."

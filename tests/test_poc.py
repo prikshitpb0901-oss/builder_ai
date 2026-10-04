@@ -1278,6 +1278,17 @@ class WebsiteIdentityTests(unittest.TestCase):
         row = {"organisation_number": "923609016", "name": "Norsk Fiskeeksport AS", "evidence": {"website": {"status": "available", "value": {"title": "Norsk Fiskeeksport AS"}}}}
         self.assertTrue(assess_website_identity(row)["publishable"])
 
+    def test_corporate_modifier_exact_match_is_publishable(self):
+        row = {
+            "organisation_number": "914821266",
+            "name": "SEA-CARGO EIENDOM AS",
+            "evidence": {"website": {"status": "available", "value": {
+                "title": "Sea-Cargo | Logistics and Shipping",
+                "final_url": "https://sea-cargo.no/",
+            }}},
+        }
+        self.assertTrue(assess_website_identity(row)["publishable"])
+
     def test_parent_brand_without_legal_name_is_quarantined(self):
         row = {"organisation_number": "988412406", "name": "Tevlingveien 23 Invest AS", "evidence": {"website": {"status": "available", "value": {"title": "Ragde Eiendom"}}}}
         self.assertFalse(assess_website_identity(row)["publishable"])
@@ -1459,6 +1470,25 @@ class ExternalFootprintConnectorsTests(unittest.TestCase):
 
         result = discover_linkedin_company("ZzzNonexistentNorwegianFakeCompany999 AS", "999999999")
         self.assertIsNone(result)
+
+    @patch("urllib.request.urlopen")
+    def test_linkedin_discovery_core_name_fallback(self, mock_urlopen):
+        mock_resp1 = MagicMock()
+        mock_resp1.read.return_value = b"[]"
+        mock_resp1.__enter__.return_value = mock_resp1
+
+        mock_resp2 = MagicMock()
+        mock_resp2.read.return_value = json.dumps([
+            {"type": "COMPANY", "id": 98765, "displayName": "Brandmaker"}
+        ]).encode("utf-8")
+        mock_resp2.__enter__.return_value = mock_resp2
+
+        mock_urlopen.side_effect = [mock_resp1, mock_resp2]
+
+        result = discover_linkedin_company("Brandmaker AS", "982942942")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["display_name"], "Brandmaker")
+        self.assertTrue(result["exact_entity"])
 
     @patch("yt_dlp.YoutubeDL")
     def test_youtube_discovery_known_entity(self, mock_ydl_class):
