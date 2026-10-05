@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
 from norway_company_agent.batch import profile_complete_for_modules, profiles_from_bulk, read_organisation_inputs, terminal_envelope, validate_envelopes  # noqa: E402
-from norway_company_agent.evidence import utc_now  # noqa: E402
+from norway_company_agent.evidence import evidence, utc_now  # noqa: E402
 from norway_company_agent.identity import apply_website_identity_gate  # noqa: E402
 from norway_company_agent.official import fetch_official_modules  # noqa: E402
 from norway_company_agent.refresh import diff_profile  # noqa: E402
@@ -34,6 +34,7 @@ from norway_company_agent.external_connectors import (  # noqa: E402
     discover_youtube_channel,
     discover_customer_reviews,
     discover_linkedin_jobs,
+    discover_nav_jobs,
 )
 from norway_company_agent.sentiment import aggregate_company_sentiment  # noqa: E402
 
@@ -54,25 +55,40 @@ def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
     name = profile.get("name", "")
     if not name:
         return []
-    clean_name = re.sub(r"\b(AS|ASA|ENK|ANS|DA|NUF|BA|SA)\b", "", name, flags=re.I).strip()
-    query_term = f'"{clean_name}" when:2y' if clean_name else f'"{name}" when:2y'
-    query = urllib.parse.quote(query_term)
-    url = f"https://news.google.com/rss/search?q={query}&hl=no&gl=NO&ceid=NO:no"
+    clean_name = re.sub(r"\b(AS|ASA|ENK|ANS|DA|NUF|BA|SA|HF|IKS|KF|BRL|HOLDING|EIENDOM)\b", "", name, flags=re.I).strip()
+    if not clean_name:
+        clean_name = name.strip()
+
+    search_queries = [f'"{clean_name}" when:2y', f"{clean_name} when:2y"]
+    raw = None
+
+    for query_term in search_queries:
+        query = urllib.parse.quote(query_term)
+        url = f"https://news.google.com/rss/search?q={query}&hl=no&gl=NO&ceid=NO:no"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": NEWS_UA, "Accept": "application/rss+xml"})
+            deadline = time.monotonic() + 4.0
+            with urllib.request.urlopen(req, timeout=4.0) as resp:
+                chunks = []
+                tot = 0
+                while tot <= 500_000:
+                    if time.monotonic() > deadline:
+                        break
+                    ch = resp.read(min(16384, 500_001 - tot))
+                    if not ch:
+                        break
+                    chunks.append(ch)
+                    tot += len(ch)
+                raw = b"".join(chunks)
+            if raw and b"<item>" in raw:
+                break
+        except Exception:
+            continue
+
+    if not raw:
+        return []
+
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": NEWS_UA, "Accept": "application/rss+xml"})
-        deadline = time.monotonic() + 4.0
-        with urllib.request.urlopen(req, timeout=4.0) as resp:
-            chunks = []
-            tot = 0
-            while tot <= 500_000:
-                if time.monotonic() > deadline:
-                    break
-                ch = resp.read(min(16384, 500_001 - tot))
-                if not ch:
-                    break
-                chunks.append(ch)
-                tot += len(ch)
-            raw = b"".join(chunks)
         root = ET.fromstring(raw)
         retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         output, seen = [], set()
@@ -218,42 +234,92 @@ def main() -> None:
 
     def enrich(profile: dict) -> tuple[dict, dict]:
         started_mono = time.monotonic()
-        enrich_deadline = started_mono + 16.0
+        enrich_deadline = started_mono + 25.0
         try:
             records, metrics = fetch_official_modules(profile["organisation_number"], fetch_modules)
             profile["evidence"].update(records)
             website_metrics = {"requests": 0, "bytes": 0, "latencies_ms": []}
             if "website" in requested_modules:
-                website_record, website_metrics = fetch_website(profile.get("website"))
+                site_seed = profile.get("website")
+                if not site_seed and time.monotonic() < enrich_deadline:
+                    # Domain guessing heuristic for entities missing registry website
+                    from norway_company_agent.identity import _tokens
+                    toks = _tokens(profile.get("name"))
+                    cand_domains = []
+                    if len(toks) == 1 and len(toks[0]) >= 4:
+                        cand_domains = [f"www.{toks[0]}.no", f"{toks[0]}.no", f"www.{toks[0]}.com", f"{toks[0]}.com"]
+                    elif len(toks) >= 2:
+                        cand_domains = [f"www.{toks[0]}{toks[1]}.no", f"{toks[0]}{toks[1]}.no", f"www.{toks[0]}-{toks[1]}.no", f"www.{toks[0]}.no"]
+                    for d_cand in cand_domains:
+                        if time.monotonic() > enrich_deadline:
+                            break
+                        c_rec, c_met = fetch_website(d_cand, timeout=2.5)
+                        if c_rec.get("status") == "available":
+                            temp_p = {**profile, "evidence": {**profile.get("evidence", {}), "website": c_rec}}
+                            gated = apply_website_identity_gate(temp_p, c_rec)
+                            if (gated.get("assessment") or {}).get("publishable"):
+                                site_seed = d_cand
+                                profile["website"] = d_cand
+                                website_record, website_metrics = c_rec, c_met
+                                break
+
+                if not site_seed or "website_record" not in locals():
+                    website_record, website_metrics = fetch_website(site_seed)
                 profile["evidence"]["website"] = apply_website_identity_gate(profile, website_record)["website"]
             # Google News RSS enrichment (guarded by wall-clock deadline & 5-layer anti-fraud defense)
             news_mentions = []
             if time.monotonic() < enrich_deadline:
                 news_mentions = _fetch_google_news(profile, limit=5)
-                if news_mentions:
-                    profile["news_mentions"] = news_mentions
-                    # Verified Sentiment Integrity
-                    sentiment_items = [
-                        {
-                            "id": m["id"],
+
+            # Incorporate first-party company website news/press releases
+            website_val = (profile.get("evidence", {}).get("website", {}) or {}).get("value") or {}
+            website_publishable = bool((website_val.get("identity_assessment") or {}).get("publishable"))
+            if website_publishable and website_val.get("news_articles"):
+                for art in website_val.get("news_articles") or []:
+                    art_url = art.get("url")
+                    art_title = art.get("title")
+                    if art_url and art_title and not any(m.get("source_url") == art_url for m in news_mentions):
+                        news_mentions.append({
+                            "id": "site-news-" + hashlib.sha256(f"{profile['organisation_number']}|{art_url}".encode()).hexdigest()[:24],
                             "organisation_number": profile["organisation_number"],
+                            "platform": "company_site",
+                            "signal_type": "public_mention",
+                            "source_url": art_url,
+                            "url": art_url,
+                            "retrieved_at": utc_now(),
+                            "published_at": art.get("published_at"),
                             "exact_entity": True,
-                            "source_class": "public_news",
-                            "source_url": m["source_url"],
-                            "retrieved_at": m["retrieved_at"],
-                            "evidence_span": m["text"],
-                            "content_sha256": hashlib.sha256(m["text"].encode()).hexdigest(),
-                            "text": m["text"],
-                            "label": "positive" if any(w in m["text"].lower() for w in ("vekst", "rekord", "overskudd", "kontrakt", "ansetter", "tildelt"))
-                                     else "negative" if any(w in m["text"].lower() for w in ("konkurs", "underskudd", "oppsigelse", "fall", "tap", "rettssak"))
-                                     else "neutral",
-                        }
-                        for m in news_mentions
-                    ]
-                    profile["sentiment"] = aggregate_company_sentiment(sentiment_items)
+                            "text": art_title,
+                            "publisher": profile.get("name"),
+                            "publisher_domain": website_val.get("registered_domain") or "",
+                            "credibility_score": 0.85,
+                            "credibility_tier": "high",
+                            "credibility_reasons": ["first_party_company_news"],
+                        })
+
+            if news_mentions:
+                profile["news_mentions"] = news_mentions
+                # Verified Sentiment Integrity
+                sentiment_items = [
+                    {
+                        "id": m["id"],
+                        "organisation_number": profile["organisation_number"],
+                        "exact_entity": True,
+                        "source_class": "public_news",
+                        "source_url": m["source_url"],
+                        "retrieved_at": m["retrieved_at"],
+                        "evidence_span": m["text"],
+                        "content_sha256": hashlib.sha256(m["text"].encode()).hexdigest(),
+                        "text": m["text"],
+                        "label": "positive" if any(w in m["text"].lower() for w in ("vekst", "rekord", "overskudd", "kontrakt", "ansetter", "tildelt"))
+                                 else "negative" if any(w in m["text"].lower() for w in ("konkurs", "underskudd", "oppsigelse", "fall", "tap", "rettssak"))
+                                 else "neutral",
+                    }
+                    for m in news_mentions
+                ]
+                profile["sentiment"] = aggregate_company_sentiment(sentiment_items)
 
             # External Footprint Connectors (LinkedIn, YouTube, Reviews, Jobs)
-            website_val = (profile.get("evidence", {}).get("website", {}) or {}).get("value") or {}
             website_domain = website_val.get("registered_domain")
 
             external_footprint = {}
@@ -274,15 +340,43 @@ def main() -> None:
                     external_footprint["reviews"] = reviews_match
                     profile["customer_reviews"] = reviews_match
 
-            # Hiring / Job Postings (LinkedIn Guest Jobs)
+            # Hiring / Job Postings: NAV Arbeidsplassen + LinkedIn + Company Career Pages
+            jobs_list = []
             if time.monotonic() < enrich_deadline:
-                jobs_match = discover_linkedin_jobs(profile.get("name") or "", profile["organisation_number"])
-                if jobs_match:
-                    external_footprint["jobs"] = jobs_match
-                    profile["jobs"] = jobs_match
+                nav_jobs = discover_nav_jobs(profile.get("name") or "", profile["organisation_number"])
+                if nav_jobs:
+                    jobs_list.extend(nav_jobs)
 
-            # Verified Website Social & Career Channels (exact entity publishable)
-            website_publishable = bool((website_val.get("identity_assessment") or {}).get("publishable"))
+            if time.monotonic() < enrich_deadline and len(jobs_list) < 3:
+                li_jobs = discover_linkedin_jobs(profile.get("name") or "", profile["organisation_number"])
+                if li_jobs:
+                    jobs_list.extend(li_jobs)
+
+            if website_publishable and website_val.get("hiring_links"):
+                for h_url in website_val.get("hiring_links")[:3]:
+                    if not any(j.get("source_url") == h_url or j.get("url") == h_url for j in jobs_list):
+                        jobs_list.append({
+                            "id": "site-job-" + hashlib.sha256(f"{profile['organisation_number']}|{h_url}".encode()).hexdigest()[:20],
+                            "organisation_number": profile["organisation_number"],
+                            "platform": "company_site",
+                            "signal_type": "job_posting",
+                            "title": "Careers / Ledige stillinger",
+                            "company": profile.get("name"),
+                            "location": profile.get("municipality") or "Norway",
+                            "job_url": h_url,
+                            "source_url": h_url,
+                            "url": h_url,
+                            "exact_entity": True,
+                            "source": "verified_website",
+                            "retrieved_at": utc_now(),
+                        })
+
+            if jobs_list:
+                external_footprint["jobs"] = jobs_list
+                profile["jobs"] = jobs_list
+                profile["hiring_signals"] = jobs_list
+
+            # Verified Website Social Channels (exact entity publishable)
             if website_publishable:
                 for soc in website_val.get("social_links") or []:
                     plat = soc.get("platform")
@@ -314,21 +408,9 @@ def main() -> None:
                                 "exact_entity": True,
                                 "source": "verified_website",
                             }
-                if "jobs" not in external_footprint and website_val.get("hiring_links"):
-                    site_jobs = [
-                        {
-                            "title": "Career / Job Posting",
-                            "company": profile.get("name"),
-                            "location": profile.get("municipality") or "Norway",
-                            "job_url": h_url,
-                        }
-                        for h_url in website_val.get("hiring_links")[:3]
-                    ]
-                    external_footprint["jobs"] = site_jobs
-                    profile["jobs"] = site_jobs
 
                 site_url = website_val.get("final_url") or profile.get("website")
-                if site_url and "website" not in external_footprint:
+                if site_url:
                     external_footprint["website"] = {
                         "platform": "company_site",
                         "url": site_url,

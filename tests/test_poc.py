@@ -1712,6 +1712,80 @@ class EvaluatorQualificationContractTests(unittest.TestCase):
         self.assertIn("what_changed", summary)
         self.assertIn("detected change(s) since prior run", summary["what_changed"])
 
+    def test_single_token_entity_verification_in_news_headline(self):
+        from norway_company_agent.news_credibility import verify_entity_in_headline
+        # Single-token major entities (Equinor, Elopak, Telenor, Sunnaas)
+        res_eq = verify_entity_in_headline("EQUINOR ASA", "Innstilling fra valgkomiteen i Equinor - Equinor")
+        self.assertTrue(res_eq["matched"])
+        self.assertEqual(res_eq["mode"], "single_token_distinct_name")
+
+        res_elo = verify_entity_in_headline("ELOPAK ASA", "Elopak raser etter oppdatering - E24")
+        self.assertTrue(res_elo["matched"])
+        self.assertEqual(res_elo["mode"], "single_token_distinct_name")
+
+        res_sun = verify_entity_in_headline("SUNNAAS SYKEHUS HF", "Skanska får kontrakt på Sunnaas sykehus - NTB")
+        self.assertTrue(res_sun["matched"])
+        self.assertEqual(res_sun["mode"], "multi_token_base_name")
+
+    def test_verified_website_social_identity_gate_accepts_first_party_links(self):
+        from norway_company_agent.identity import assess_social_identity
+        profile = {
+            "organisation_number": "811943622",
+            "name": "G3 GAUSDAL TREINDUSTRIER SA",
+            "evidence": {
+                "website": {
+                    "value": {
+                        "registered_domain": "g3i.no",
+                        "final_url": "https://g3i.no/",
+                        "identity_assessment": {"publishable": True, "score": 0.95},
+                    }
+                }
+            },
+        }
+        # First-party declared handle on verified site
+        link = {"platform": "x", "url": "https://x.com/g3i_no"}
+        assessment = assess_social_identity(profile, link)
+        self.assertTrue(assessment["publishable"])
+        self.assertTrue(assessment["identity_score"] >= 0.9)
+
+    def test_extract_dated_news_articles_from_html(self):
+        from norway_company_agent.website import _extract_dated_news_articles
+        from bs4 import BeautifulSoup
+
+        html = """
+        <html>
+        <head><title>Test Company</title></head>
+        <body>
+            <div class="news-item">
+                <h2><a href="/nyheter/rekordoverskudd-2026">Rekordoverskudd for selskapet i 2026</a></h2>
+                <time datetime="2026-09-15T08:00:00Z">15. september 2026</time>
+            </div>
+            <article>
+                <h3><a href="/aktuelt/ny-sjef-ansatt">Ny administrerende direktør er ansatt</a></h3>
+                <span class="pubdate">Publisert 20.08.2026</span>
+            </article>
+        </body>
+        </html>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        articles = _extract_dated_news_articles("https://example.no/", soup)
+        self.assertTrue(len(articles) >= 2)
+        urls = [a["url"] for a in articles]
+        self.assertIn("https://example.no/nyheter/rekordoverskudd-2026", urls)
+        self.assertIn("https://example.no/aktuelt/ny-sjef-ansatt", urls)
+        self.assertEqual(articles[0]["published_at"], "2026-09-15T08:00:00Z")
+        self.assertEqual(articles[1]["published_at"], "2026-08-20T00:00:00Z")
+
+    def test_discover_nav_jobs_schema_compliance(self):
+        from norway_company_agent.external_connectors import discover_nav_jobs
+        jobs = discover_nav_jobs("EQUINOR ASA", "923609016")
+        if jobs:
+            j = jobs[0]
+            self.assertEqual(j["signal_type"], "job_posting")
+            self.assertTrue(j["source_url"].startswith("https://arbeidsplassen.nav.no/stillinger/stilling/"))
+            self.assertTrue(j["exact_entity"])
+            self.assertEqual(j["organisation_number"], "923609016")
+
 
 if __name__ == "__main__":
     unittest.main()

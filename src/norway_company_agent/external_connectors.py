@@ -361,6 +361,7 @@ def discover_linkedin_jobs(company_name: str, org_number: str, timeout: float = 
         soup = BeautifulSoup(raw, "html.parser")
         jobs = []
         comp_core = _normalize_name(company_name)
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         for card in soup.select("div.base-search-card")[:3]:
             title_node = card.select_one("h3.base-search-card__title, span.sr-only")
             company_node = card.select_one("h4.base-search-card__subtitle")
@@ -368,15 +369,93 @@ def discover_linkedin_jobs(company_name: str, org_number: str, timeout: float = 
             link_node = card.select_one("a.base-card__full-link")
             comp_name = company_node.get_text(" ", strip=True) if company_node else ""
             c_core = _normalize_name(comp_name)
-            if comp_core and c_core and (comp_core in c_core or c_core in comp_core):
+            j_url = link_node.get("href") if link_node else ""
+            if comp_core and c_core and (comp_core in c_core or c_core in comp_core) and j_url:
                 jobs.append({
+                    "id": "li-job-" + hashlib.sha256(f"{org_number}|{j_url}".encode()).hexdigest()[:20],
+                    "organisation_number": str(org_number),
+                    "platform": "linkedin",
+                    "signal_type": "job_posting",
                     "title": title_node.get_text(" ", strip=True) if title_node else "Open Position",
                     "company": comp_name,
                     "location": loc_node.get_text(" ", strip=True) if loc_node else "Norway",
-                    "job_url": link_node.get("href") if link_node else "",
+                    "job_url": j_url,
+                    "source_url": j_url,
+                    "url": j_url,
+                    "exact_entity": True,
+                    "retrieved_at": now_iso,
                 })
         return jobs
     except Exception:
         _JOBS_CIRCUIT.record_failure()
+        return []
+
+
+def discover_nav_jobs(company_name: str, org_number: str, timeout: float = 3.0) -> list[dict[str, Any]]:
+    """Discover verified Norwegian national job postings from official NAV Arbeidsplassen public search."""
+    if not company_name:
+        return []
+    clean_name = re.sub(r"\b(AS|ASA|ENK|ANS|DA|NUF|BA|SA|HF|IKS|KF|BRL|HOLDING|EIENDOM)\b", "", company_name, flags=re.I).strip()
+    if not clean_name:
+        clean_name = company_name.strip()
+    try:
+        url = f"https://arbeidsplassen.nav.no/stillinger/api/search?q={urllib.parse.quote(clean_name)}&size=5"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+            },
+        )
+        deadline = time.monotonic() + timeout
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = _read_bounded_with_deadline(resp, 300_000, deadline)
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+        hits = data.get("hits", {}).get("hits", [])
+        if not hits:
+            return []
+
+        comp_core = _normalize_name(company_name)
+        jobs = []
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        for hit in hits:
+            src = hit.get("_source", {})
+            uuid = src.get("uuid")
+            if not uuid:
+                continue
+            employer = src.get("businessName") or src.get("employer") or ""
+            emp_core = _normalize_name(employer)
+            # Require matching employer core
+            if not (comp_core and emp_core and (comp_core in emp_core or emp_core in comp_core)):
+                continue
+
+            j_url = f"https://arbeidsplassen.nav.no/stillinger/stilling/{uuid}"
+            title = src.get("title") or "Ledig stilling"
+            loc_list = src.get("locations") or []
+            location = loc_list[0].get("city") if loc_list and isinstance(loc_list[0], dict) else "Norge"
+            pub_date = src.get("published")
+
+            jobs.append({
+                "id": "nav-job-" + hashlib.sha256(f"{org_number}|{uuid}".encode()).hexdigest()[:20],
+                "organisation_number": str(org_number),
+                "platform": "job_board",
+                "signal_type": "job_posting",
+                "title": title,
+                "company": employer,
+                "location": location,
+                "job_url": j_url,
+                "source_url": j_url,
+                "url": j_url,
+                "date_posted": pub_date,
+                "published_at": pub_date,
+                "exact_entity": True,
+                "source": "nav_arbeidsplassen",
+                "retrieved_at": now_iso,
+            })
+            if len(jobs) >= 3:
+                break
+        return jobs
+    except Exception:
         return []
 

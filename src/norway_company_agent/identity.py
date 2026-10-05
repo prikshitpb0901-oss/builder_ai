@@ -187,16 +187,23 @@ def assess_social_identity(profile: dict[str, Any], link: dict[str, str]) -> dic
     core_compact = "".join(core)
     ratio = len(set(matched)) / len(set(core)) if core else 0.0
     web_val = (profile.get("evidence", {}).get("website", {}) or {}).get("value") or {}
+    web_assessment = web_val.get("identity_assessment") or {}
     web_domain = web_val.get("registered_domain") or urllib.parse.urlparse(web_val.get("final_url") or "").hostname or ""
     dom_tokens = _tokens(web_domain.removeprefix("www."))
     dom_compact = "".join(dom_tokens)
 
+    # First-party declared link on an exact-verified company website is trusted authority
+    is_verified_site_link = bool(web_assessment.get("publishable"))
+
     if core_compact and core_compact in handle_compact:
         score = 0.98
         reason = "normalized legal-name sequence appears in the social handle"
-    elif dom_compact and len(dom_compact) >= 5 and dom_compact in handle_compact:
+    elif dom_compact and len(dom_compact) >= 3 and (dom_compact in handle_compact or any(t in handle_compact for t in dom_tokens if len(t) >= 3)):
         score = 0.95
         reason = "social handle matches verified company website domain"
+    elif is_verified_site_link:
+        score = 0.95
+        reason = "social link declared on exact-verified company website"
     elif len(core) == 1 and matched:
         score = 0.95
         reason = "single distinctive legal-name token appears in the social handle"
@@ -225,7 +232,7 @@ def apply_website_identity_gate(profile: dict[str, Any], website: dict[str, Any]
     value["identity_assessment"] = assessment
     original = list(value.get("discovered_social_links") or value.get("social_links") or [])
     value["discovered_social_links"] = original
-    social_assessments = [assess_social_identity(profile, link) for link in original]
+    social_assessments = [assess_social_identity(temporary_profile, link) for link in original]
     value["social_link_assessments"] = social_assessments
     value["social_links"] = [
         {"platform": item["platform"], "url": item["url"]}

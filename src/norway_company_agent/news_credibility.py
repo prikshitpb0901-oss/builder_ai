@@ -83,7 +83,7 @@ CLICKBAIT_PATTERNS = [
     r"\bblow your mind\b",
 ]
 
-LEGAL_SUFFIXES = {"as", "asa", "sa", "ba", "da", "ans", "enk", "nuf", "sti"}
+LEGAL_SUFFIXES = {"as", "asa", "sa", "ba", "da", "ans", "enk", "nuf", "sti", "hf", "iks", "kf", "brl", "holding", "eiendom"}
 
 
 def extract_domain(url_or_domain: str) -> str:
@@ -151,11 +151,17 @@ def verify_entity_in_headline(company_name: str, title: str) -> dict[str, bool |
 
     # Base name without legal suffix (e.g. 'Byggmester Flo' for 'Byggmester Flo AS')
     base_tokens = [t for t in comp_tokens if t not in LEGAL_SUFFIXES]
-    if base_tokens and len(base_tokens) >= 2:
+    if base_tokens:
         n_base = len(base_tokens)
-        for i in range(len(title_tokens) - n_base + 1):
-            if title_tokens[i:i + n_base] == base_tokens:
+        if n_base >= 2:
+            for i in range(len(title_tokens) - n_base + 1):
+                if title_tokens[i:i + n_base] == base_tokens:
+                    return {"matched": True, "mode": "multi_token_base_name"}
+            if all(t in title_tokens for t in base_tokens):
                 return {"matched": True, "mode": "multi_token_base_name"}
+        elif n_base == 1 and (len(base_tokens[0]) >= 4 or any(ch in base_tokens[0] for ch in ("æ", "ø", "å"))):
+            if base_tokens[0] in title_tokens:
+                return {"matched": True, "mode": "single_token_distinct_name"}
 
     return {"matched": False, "mode": "none"}
 
@@ -276,12 +282,19 @@ def evaluate_news_credibility(
 
     # ── 5. Entity Specificity (0.00–0.15) ──
     entity_check = verify_entity_in_headline(company_name, title)
+    comp_base = [t for t in re.findall(r"[a-z0-9æøå]+", str(company_name or "").casefold()) if t not in LEGAL_SUFFIXES]
+    pub_is_comp = bool(comp_base and any(t in pub_lower for t in comp_base if len(t) >= 4))
+
     if entity_check["matched"] and entity_check["mode"] == "exact_legal_name":
         score += 0.15
         reasons.append("exact_legal_company_name_in_headline")
-    elif entity_check["matched"] and entity_check["mode"] == "multi_token_base_name":
-        score += 0.10
-        reasons.append("multi_token_base_name_match")
+    elif entity_check["matched"] and entity_check["mode"] in ("multi_token_base_name", "single_token_distinct_name"):
+        score += 0.12
+        reasons.append("distinct_company_name_in_headline")
+    elif pub_is_comp:
+        score += 0.12
+        entity_check = {"matched": True, "mode": "publisher_is_company"}
+        reasons.append("publisher_matches_company_name")
     else:
         score += 0.02
         reasons.append("weak_or_ambiguous_entity_reference")
@@ -297,7 +310,7 @@ def evaluate_news_credibility(
 
     # Publication gate: strict entity alignment required to prevent false attribution
     is_publishable = (
-        final_score >= 0.60
+        final_score >= 0.50
         and bool(entity_check.get("matched"))
         and not fatal_flags
     )

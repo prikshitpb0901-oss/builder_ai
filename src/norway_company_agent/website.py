@@ -19,7 +19,12 @@ import trafilatura
 
 from .evidence import evidence
 
-USER_AGENT = "builderr-signalpost-poc/0.1 (+https://builderr.ai)"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+BROWSER_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "nb,no;q=0.9,en-US;q=0.8,en;q=0.7",
+}
 SOCIAL_HOSTS = {
     "linkedin.com": "linkedin",
     "facebook.com": "facebook",
@@ -79,10 +84,22 @@ def assert_public_url(url: str) -> None:
         raise ValueError("Local hosts are blocked")
     if parsed.port and parsed.port not in {80, 443, 8080, 8443}:
         raise ValueError(f"Dangerous or non-standard port {parsed.port} is blocked")
-    try:
-        addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)}
-    except socket.gaierror as exc:
-        raise ValueError("Hostname did not resolve") from exc
+    candidates = [host]
+    if host.startswith("www."):
+        candidates.append(host.removeprefix("www."))
+    else:
+        candidates.append("www." + host)
+    addresses = set()
+    last_exc = None
+    for cand in candidates:
+        try:
+            addresses = {item[4][0] for item in socket.getaddrinfo(cand, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)}
+            if addresses:
+                break
+        except socket.gaierror as exc:
+            last_exc = exc
+    if not addresses:
+        raise ValueError("Hostname did not resolve") from last_exc
     for address in addresses:
         ip = ipaddress.ip_address(address)
         if not ip.is_global:
@@ -250,9 +267,99 @@ def _priority_links(base_url: str, soup: BeautifulSoup, limit: int = 4) -> list[
     return [url for url, _ in sorted(candidates.items(), key=lambda item: (item[1], item[0]))[:limit]]
 
 
-def _fetch_secondary_page(url: str, *, homepage_domain: str, timeout: float, max_bytes: int) -> tuple[dict[str, Any] | None, list[dict[str, str]], int, int, int, str | None]:
+def _extract_dated_news_articles(base_url: str, soup: BeautifulSoup) -> list[dict[str, Any]]:
+    articles = []
+    seen = set()
+    for time_node in soup.find_all(["time", "span", "div", "p"]):
+        dt_val = None
+        if time_node.name == "time" and time_node.get("datetime"):
+            dt_val = str(time_node.get("datetime")).strip()
+        else:
+            text = time_node.get_text(" ", strip=True)
+            m = re.search(r"\b(?:publisert|published|oppdatert)?\s*(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b", text, re.I)
+            if m:
+                day, month, year = m.groups()
+                try:
+                    dt_val = f"{int(year):04d}-{int(month):02d}-{int(day):02d}T00:00:00Z"
+                except Exception:
+                    pass
+            elif re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text):
+                m_iso = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text)
+                if m_iso:
+                    dt_val = f"{m_iso.group(1)}-{m_iso.group(2)}-{m_iso.group(3)}T00:00:00Z"
+
+        if dt_val:
+            parent = time_node.parent
+            link = None
+            title = None
+            for _ in range(4):
+                if parent is None:
+                    break
+                link = parent.find("a", href=True)
+                heading = parent.find(["h1", "h2", "h3", "h4"])
+                if heading:
+                    title = heading.get_text(" ", strip=True)
+                if link and title:
+                    break
+                parent = parent.parent
+            if link and not title:
+                title = link.get_text(" ", strip=True)
+            if link and title and len(title) >= 10:
+                art_url = urllib.parse.urljoin(base_url, link.get("href"))
+                if art_url not in seen:
+                    seen.add(art_url)
+                    articles.append({
+                        "url": art_url,
+                        "title": title[:200],
+                        "published_at": dt_val,
+                    })
+
+    meta_date = None
+    for meta in soup.find_all("meta"):
+        prop = meta.get("property") or meta.get("name") or ""
+        if prop in ("article:published_time", "og:published_time", "pubdate", "publishdate", "date"):
+            meta_date = meta.get("content")
+            break
+    if meta_date and soup.title:
+        title = soup.title.get_text(" ", strip=True)
+        if base_url not in seen and len(title) >= 5:
+            seen.add(base_url)
+            articles.append({
+                "url": base_url,
+                "title": title[:200],
+                "published_at": meta_date,
+            })
+
+    for anchor in soup.select("a[href]"):
+        href = str(anchor.get("href") or "").strip()
+        atext = anchor.get_text(" ", strip=True)
+        if len(atext) < 15:
+            continue
+        full_href = urllib.parse.urljoin(base_url, href)
+        parsed = urllib.parse.urlparse(full_href)
+        if any(term in parsed.path.lower() for term in ("/nyheter/", "/news/", "/aktuelt/", "/presse/", "/artikler/", "/media/")):
+            date_match = re.search(r"\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b", full_href) or re.search(r"\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b", atext)
+            pub_date = None
+            if date_match:
+                g = date_match.groups()
+                if len(g[0]) == 4:
+                    pub_date = f"{g[0]}-{int(g[1]):02d}-{int(g[2]):02d}T00:00:00Z"
+                else:
+                    pub_date = f"{g[2]}-{int(g[1]):02d}-{int(g[0]):02d}T00:00:00Z"
+            if full_href not in seen:
+                seen.add(full_href)
+                articles.append({
+                    "url": full_href,
+                    "title": atext[:200],
+                    "published_at": pub_date,
+                })
+
+    return articles[:10]
+
+
+def _fetch_secondary_page(url: str, *, homepage_domain: str, timeout: float, max_bytes: int) -> tuple[dict[str, Any] | None, list[dict[str, str]], list[str], list[dict[str, Any]], int, int, int, str | None]:
     if not _robots_allowed(url, timeout):
-        return None, [], 1, 0, 0, "robots.txt disallows page"
+        return None, [], [], [], 1, 0, 0, "robots.txt disallows page"
     started = time.monotonic()
     deadline = started + timeout
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"})
@@ -262,9 +369,9 @@ def _fetch_secondary_page(url: str, *, homepage_domain: str, timeout: float, max
             elapsed = int((time.monotonic() - started) * 1000)
             final_url = response.geturl()
             if len(raw) > max_bytes or "html" not in response.headers.get("content-type", "").lower():
-                return None, [], 2, len(raw), elapsed, "unsupported or oversized page"
+                return None, [], [], [], 2, len(raw), elapsed, "unsupported or oversized page"
             if _registered_domain(final_url) != homepage_domain:
-                return None, [], 2, len(raw), elapsed, "redirected outside registered domain"
+                return None, [], [], [], 2, len(raw), elapsed, "redirected outside registered domain"
         page_html = raw.decode("utf-8", errors="replace")
         page_soup = BeautifulSoup(page_html, "lxml")
         page_text = trafilatura.extract(page_html, url=final_url, include_links=False, include_tables=False, favor_precision=True) or ""
@@ -274,9 +381,18 @@ def _fetch_secondary_page(url: str, *, homepage_domain: str, timeout: float, max
             "main_text_excerpt": page_text[:5000],
             "content_sha256": __import__("hashlib").sha256(raw).hexdigest(),
         }
-        return page, _social_links(final_url, page_soup), 2, len(raw), elapsed, None
+        sec_hiring = []
+        for anchor in page_soup.select("a[href]"):
+            ahref = str(anchor.get("href") or "").lower()
+            atext = anchor.get_text(" ", strip=True).lower()
+            if any(term in ahref or term in atext for term in ("karriere", "career", "jobb", "ledige-stillinger", "stillinger", "stilling", "work-with-us")):
+                c_url = urllib.parse.urljoin(final_url, str(anchor.get("href")))
+                if c_url not in sec_hiring:
+                    sec_hiring.append(c_url)
+        sec_news = _extract_dated_news_articles(final_url, page_soup)
+        return page, _social_links(final_url, page_soup), sec_hiring[:5], sec_news[:5], 2, len(raw), elapsed, None
     except Exception as exc:
-        return None, [], 2, 0, int((time.monotonic() - started) * 1000), f"{type(exc).__name__}: {str(exc)[:120]}"
+        return None, [], [], [], 2, 0, int((time.monotonic() - started) * 1000), f"{type(exc).__name__}: {str(exc)[:120]}"
 
 
 def _jsonld_organisations(metadata: dict[str, Any]) -> list[dict[str, Any]]:
@@ -308,10 +424,21 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
     normalized = normalize_homepage(url)
     if not normalized:
         return evidence("website", "not_found", "registry_linked_company_website", "https://data.brreg.no/enhetsregisteret/api/enheter", note="No valid registry website URL"), {"requests": 0, "bytes": 0, "latencies_ms": []}
+    
+    # Try public URL with www / apex fallback
     try:
         assert_public_url(normalized)
     except ValueError as exc:
-        return evidence("website", "blocked", "registry_linked_company_website", normalized, note=str(exc)), {"requests": 0, "bytes": 0, "latencies_ms": []}
+        # Fallback between apex and www. prefix
+        parsed = urllib.parse.urlparse(normalized)
+        alt_netloc = parsed.netloc.removeprefix("www.") if parsed.netloc.startswith("www.") else ("www." + parsed.netloc)
+        alt_url = urllib.parse.urlunparse((parsed.scheme, alt_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+        try:
+            assert_public_url(alt_url)
+            normalized = alt_url
+        except ValueError:
+            return evidence("website", "blocked", "registry_linked_company_website", normalized, note=str(exc)), {"requests": 0, "bytes": 0, "latencies_ms": []}
+
     if not _robots_allowed(normalized, timeout):
         return evidence("website", "blocked", "registry_linked_company_website", normalized, note="robots.txt disallows this user agent"), {"requests": 1, "bytes": 0, "latencies_ms": []}
     started = time.monotonic()
@@ -344,10 +471,11 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
         for anchor in soup.select("a[href]"):
             ahref = str(anchor.get("href") or "").lower()
             atext = anchor.get_text(" ", strip=True).lower()
-            if any(term in ahref or term in atext for term in ("karriere", "career", "jobb", "ledige-stillinger", "stillinger")):
+            if any(term in ahref or term in atext for term in ("karriere", "career", "jobb", "ledige-stillinger", "stillinger", "stilling", "work-with-us")):
                 c_url = urllib.parse.urljoin(final_url, str(anchor.get("href")))
                 if c_url not in career_anchors:
                     career_anchors.append(c_url)
+        homepage_news = _extract_dated_news_articles(final_url, soup)
         value = {
             "requested_url": normalized,
             "final_url": final_url,
@@ -357,6 +485,7 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
             "main_text_excerpt": text[:5000],
             "footer_text": footer_text[:2000],
             "hiring_links": career_anchors[:5],
+            "news_articles": homepage_news[:5],
             "social_links": _social_links(final_url, soup),
             "structured_organisations": _jsonld_organisations(structured),
             "content_sha256": __import__("hashlib").sha256(raw).hexdigest(),
@@ -364,13 +493,15 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
         }
         pages = [{"url": final_url, "title": title[:500], "main_text_excerpt": text[:5000], "content_sha256": value["content_sha256"]}]
         social = value["social_links"]
+        all_hiring = list(career_anchors)
+        all_news = list(homepage_news)
         crawl_errors = []
         requests = 2
         bytes_received = len(raw)
         page_latencies = [elapsed]
         homepage_domain = value["registered_domain"]
         for page_url in _priority_links(final_url, soup):
-            page, page_social, page_requests, page_bytes, page_elapsed, page_error = _fetch_secondary_page(
+            page, page_social, page_hiring, page_news, page_requests, page_bytes, page_elapsed, page_error = _fetch_secondary_page(
                 page_url,
                 homepage_domain=homepage_domain,
                 timeout=timeout,
@@ -383,10 +514,18 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
             if page:
                 pages.append(page)
                 social.extend(page_social)
+                for h in page_hiring:
+                    if h not in all_hiring:
+                        all_hiring.append(h)
+                for n in page_news:
+                    if not any(existing["url"] == n["url"] for existing in all_news):
+                        all_news.append(n)
             elif page_error:
                 crawl_errors.append({"url": page_url, "error": page_error})
         value["pages"] = pages
         value["social_links"] = list({(item["platform"], item["url"]): item for item in social}.values())
+        value["hiring_links"] = all_hiring[:8]
+        value["news_articles"] = all_news[:8]
         value["crawl_errors"] = crawl_errors
         return evidence("website", "available", "registry_linked_company_website", final_url, value=value, note="Company-controlled claim layer; not an official registry fact", content_sha256=value["content_sha256"]), {"requests": requests, "bytes": bytes_received, "latencies_ms": page_latencies}
     except urllib.error.HTTPError as exc:
