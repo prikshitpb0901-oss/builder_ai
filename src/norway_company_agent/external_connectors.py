@@ -213,7 +213,8 @@ def discover_youtube_channel(
             "socket_timeout": 8,
         }
 
-        query = f'ytsearch{max_results}:"{company_name}" Norway'
+        clean_name = re.sub(r"\b(AS|ASA|ENK|ANS|DA|NUF|BA|SA|HF|IKS|KF|BRL|HOLDING|EIENDOM)\b", "", company_name, flags=re.I).strip() or company_name
+        query = f'ytsearch{max_results}:"{clean_name}" Norway'
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(query, download=False)
 

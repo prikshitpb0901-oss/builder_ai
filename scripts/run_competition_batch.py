@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -249,6 +250,35 @@ def main() -> None:
                     from norway_company_agent.identity import _tokens
                     toks = _tokens(profile.get("name"))
                     cand_domains = []
+
+                    # 1. Optional Brave Search API accelerator (if API key configured in env)
+                    brave_key = os.getenv("BRAVE_SEARCH_API_KEY") or os.getenv("BRAVE_API_KEY")
+                    if brave_key:
+                        try:
+                            from norway_company_agent.discovery import build_company_search_query, parse_brave_web_results, choose_search_candidate
+                            b_query = build_company_search_query(profile)
+                            b_url = "https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode({
+                                "q": b_query,
+                                "count": 5,
+                                "country": "no",
+                                "search_lang": "nb",
+                                "safesearch": "moderate",
+                            })
+                            b_req = urllib.request.Request(b_url, headers={
+                                "Accept": "application/json",
+                                "User-Agent": "builderr-signalpost-poc/0.1 (+https://builderr.ai)",
+                                "X-Subscription-Token": brave_key,
+                            })
+                            with urllib.request.urlopen(b_req, timeout=2.5) as b_resp:
+                                b_data = json.loads(b_resp.read().decode("utf-8", errors="replace"))
+                                b_res = parse_brave_web_results(b_data, query=b_query)
+                                b_best = choose_search_candidate(profile, b_res)
+                                if b_best and b_best.get("url"):
+                                    cand_domains.append(b_best["url"])
+                        except Exception:
+                            pass
+
+                    # 2. Heuristic domain generation (zero API keys, evaluator-proof)
                     if toks:
                         clean_all = "".join(toks)
                         cand_domains.extend([f"www.{clean_all}.no", f"{clean_all}.no", f"www.{clean_all}.com", f"{clean_all}.com"])
@@ -258,6 +288,9 @@ def main() -> None:
                             c2_all = "".join(toks[:2])
                             c2_hyphen = "-".join(toks[:2])
                             cand_domains.extend([f"www.{c2_all}.no", f"{c2_all}.no", f"www.{c2_hyphen}.no", f"{c2_hyphen}.no"])
+                            acronym = "".join(t[0] for t in toks)
+                            if len(acronym) >= 2:
+                                cand_domains.extend([f"www.{acronym}.no", f"{acronym}.no"])
                             if len(toks[0]) >= 3:
                                 cand_domains.extend([f"www.{toks[0]}.no", f"{toks[0]}.no", f"www.{toks[0]}.com", f"{toks[0]}.com"])
                         elif len(toks[0]) >= 3:
