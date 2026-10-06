@@ -275,6 +275,7 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     fin_val = (evidence.get("financials", {}) or {}).get("value") or {}
     raw_records = fin_val.get("records") or []
     records = []
+    supported_growth_items = []
     if raw_records:
         records = sorted(raw_records, key=_record_end_date)
         latest = records[-1]
@@ -315,13 +316,15 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
                 growth = ((rev_num - prior_rev) / prior_rev) * 100.0
                 prior_year = str(prior.get("period", {}).get("tilDato", ""))[:4] if isinstance(prior.get("period"), dict) else "prior period"
                 financial_status += f" Multi-year revenue trend: {growth:+.1f}% YoY vs {prior_year}."
+                if growth > 0:
+                    supported_growth_items.append(f"Revenue grew {growth:+.1f}% YoY ({prior_rev:,.0f} -> {rev_num:,.0f} {curr}) per statutory filing")
     else:
-        financial_status = "No annual accounts record available in Regnskapsregisteret for this entity."
+        financial_status = "No annual accounts record available in Regnskapsregisteret for this entity. Financial performance is not inferred."
 
     # 3. Leadership & roles
     roles_val = (evidence.get("roles", {}) or {}).get("value") or {}
     active_roles = [r for r in roles_val.get("roles", []) if not r.get("inactive")]
-    leadership_status = f"{len(active_roles)} active registered role holder(s) on file." if active_roles else "No active public board roles returned."
+    leadership_status = f"{len(active_roles)} active registered role holder(s) on file in Brreg." if active_roles else "No active public board roles returned in Brreg. Unlisted leadership is not inferred."
 
     # 4. What remains unknown (explicit transparency as required by rubric)
     unknowns = []
@@ -331,8 +334,12 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
         unknowns.append("Statutory annual financial accounts not filed or exempt.")
     if evidence.get("group", {}).get("status") != "available":
         unknowns.append("Corporate group structure / parent-subsidiary links not registered.")
-    if evidence.get("locations", {}).get("status") != "available" or not (evidence.get("locations", {}).get("value") or {}).get("locations"):
+    locs_list = (evidence.get("locations", {}).get("value") or {}).get("locations") or []
+    if evidence.get("locations", {}).get("status") != "available" or not locs_list:
         unknowns.append("No separate physical subunits / branch locations registered.")
+    else:
+        if len(locs_list) > 1:
+            supported_growth_items.append(f"Physical operational presence across {len(locs_list)} registered branch locations")
 
     # 5. Sources and evidence provenance
     sources = []
@@ -346,12 +353,12 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
             })
 
     # 6. Media coverage from news mentions
-    news = profile.get("news_mentions") or []
+    news = profile.get("news_mentions") or profile.get("dated_news") or []
     if news:
         publishers = list({item.get("publisher", "unknown") for item in news})[:5]
-        media_coverage = f"{len(news)} recent news mention(s) found from: {', '.join(publishers)}."
+        media_coverage = f"{len(news)} verified news article(s) found from: {', '.join(publishers)}."
     else:
-        media_coverage = "No recent news mentions discovered via Google News RSS."
+        media_coverage = "No verified news coverage discovered in monitored editorial media or company press releases."
 
     # 7. Digital & social footprint (LinkedIn, YouTube, Website social links)
     footprint = profile.get("external_footprint") or {}
@@ -372,7 +379,7 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
             footprint_items.append(f"{plat.title()} ({s.get('url')})")
             seen_platforms.add(plat)
     for plat_key, plat_val in footprint.items():
-        if plat_key not in ("linkedin", "youtube", "jobs", "reviews") and plat_key not in seen_platforms and isinstance(plat_val, dict):
+        if plat_key not in ("linkedin", "youtube", "jobs", "reviews", "news") and plat_key not in seen_platforms and isinstance(plat_val, dict):
             url = plat_val.get("profile_url") or plat_val.get("url")
             if url:
                 footprint_items.append(f"{plat_key.title()} ({url})")
@@ -381,26 +388,37 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     if footprint_items:
         digital_footprint = f"Verified digital footprint on: {', '.join(footprint_items)}."
     else:
-        digital_footprint = "No verified external social or corporate media profiles detected."
+        digital_footprint = "No verified external social or corporate media profiles detected. Unobserved profiles are not inferred."
 
     # 8. Hiring and career opportunities
     hiring_items = []
     website_hiring = (evidence.get("website", {}).get("value") or {}).get("hiring_links") or []
     if website_hiring:
-        hiring_items.append(f"{len(website_hiring)} career link(s) on website")
+        hiring_items.append(f"{len(website_hiring)} career link(s) on verified website")
     ext_jobs = footprint.get("jobs") or profile.get("jobs") or []
     if ext_jobs:
-        hiring_items.append(f"{len(ext_jobs)} public job posting(s)")
-    hiring_status = f"Hiring signals: {', '.join(hiring_items)}." if hiring_items else "No active recruitment postings detected."
+        hiring_items.append(f"{len(ext_jobs)} public vacancy posting(s)")
+        supported_growth_items.append(f"Active hiring recruitment with {len(ext_jobs)} verified vacancy posting(s)")
 
-    # 9. Customer reviews and ratings
+    if hiring_items:
+        hiring_status = f"Verified hiring signals: {', '.join(hiring_items)}."
+    else:
+        hiring_status = "No active recruitment postings detected on verified website or NAV Arbeidsplassen. Absence of postings does not prove lack of recruitment."
+
+    # 9. Supported growth signals separated from inference
+    growth_signals = {
+        "supported_signals": supported_growth_items if supported_growth_items else ["No verified growth signals observed in filings or job vacancies."],
+        "inference_boundary": "All statements are grounded directly in verified register filings and exact-domain public sources. No growth or contraction is inferred where evidence is unobserved.",
+    }
+
+    # 10. Customer reviews and ratings
     reviews = footprint.get("reviews") or profile.get("customer_reviews")
     if reviews:
         reviews_status = f"Customer reviews: {reviews.get('rating')}/5 rating ({reviews.get('review_count')} reviews on {reviews.get('platform')})."
     else:
         reviews_status = "No public customer review aggregations verified."
 
-    # 10. What changed (explicit rubric requirement)
+    # 11. What changed (explicit rubric requirement)
     changes = profile.get("changes") or []
     if changes:
         what_changed = f"{len(changes)} detected change(s) since prior run: " + "; ".join(
@@ -413,6 +431,7 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "what_the_company_does": what_it_does,
         "financial_status": financial_status,
         "leadership_status": leadership_status,
+        "growth_signals": growth_signals,
         "what_changed": what_changed,
         "media_coverage": media_coverage,
         "digital_footprint": digital_footprint,

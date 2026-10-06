@@ -1787,6 +1787,158 @@ class EvaluatorQualificationContractTests(unittest.TestCase):
             self.assertEqual(j["organisation_number"], "923609016")
 
 
+    def test_extract_job_postings_jsonld_and_anchors(self):
+        from norway_company_agent.website import _extract_job_postings
+        from bs4 import BeautifulSoup
+
+        html = """
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "JobPosting",
+                "title": "Senior Cloud Engineer",
+                "datePosted": "2026-03-01T10:00:00Z",
+                "jobLocation": {"address": {"addressLocality": "Oslo"}},
+                "url": "https://example.no/careers/cloud-engineer"
+            }
+            </script>
+        </head>
+        <body>
+            <a href="/karriere/ledige-stillinger">Se alle ledige stillinger</a>
+        </body>
+        </html>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        jobs = _extract_job_postings("https://example.no/", soup)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "Senior Cloud Engineer")
+        self.assertEqual(jobs[0]["date_posted"], "2026-03-01T10:00:00Z")
+        self.assertEqual(jobs[0]["location"], "Oslo")
+
+    def test_jsonld_newsarticle_schema_extraction_with_offset(self):
+        from norway_company_agent.website import _extract_dated_news_articles
+        from bs4 import BeautifulSoup
+
+        html = """
+        <html>
+        <head>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "NewsArticle",
+                "headline": "Bedre sosial funksjon etter hjerneskade",
+                "datePublished": "2025-09-22T20:00:00+02:00",
+                "url": "https://example.no/nyheter/bedre-sosial-funksjon"
+            }
+            </script>
+        </head>
+        <body><p>Nyheter</p></body>
+        </html>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        articles = _extract_dated_news_articles("https://example.no/", soup)
+        self.assertEqual(len(articles), 1)
+        self.assertEqual(articles[0]["title"], "Bedre sosial funksjon etter hjerneskade")
+        self.assertEqual(articles[0]["published_at"], "2025-09-22T20:00:00+02:00")
+        self.assertEqual(articles[0]["schema_type"], "NewsArticle")
+
+    def test_discovered_company_website_source_class_tagging(self):
+        from norway_company_agent.website import fetch_website
+        rec, _ = fetch_website("https://example.com", source_class="discovered_company_website")
+        self.assertEqual(rec["source_class"], "discovered_company_website")
+
+    def test_synthesis_growth_signals_separated_from_inference(self):
+        from norway_company_agent.research import synthesize_company_profile
+        profile = {
+            "name": "TEST NORGE AS",
+            "organisation_number": "999888777",
+            "evidence": {
+                "financials": {
+                    "status": "available",
+                    "value": {
+                        "records": [
+                            {"period": "2023", "revenue": 1000000, "annual_result": 100000},
+                            {"period": "2024", "revenue": 1500000, "annual_result": 200000},
+                        ]
+                    }
+                }
+            },
+            "jobs": [{"title": "Prosjektleder", "job_url": "https://test.no/careers/1"}],
+        }
+        res = synthesize_company_profile(profile)
+        self.assertIn("growth_signals", res)
+        growth = res["growth_signals"]
+        self.assertTrue(len(growth["supported_signals"]) >= 2)
+        self.assertTrue(any("50.0%" in s for s in growth["supported_signals"]))
+        self.assertTrue(any("Active hiring" in s for s in growth["supported_signals"]))
+        self.assertIn("No growth or contraction is inferred", growth["inference_boundary"])
+
+    def test_canonical_dated_news_hiring_and_social_profiles_keys(self):
+        from norway_company_agent.evidence import evidence
+        profile = {
+            "name": "TEST NORGE AS",
+            "organisation_number": "999888777",
+            "evidence": {},
+        }
+        # Verify news / dated_news contract
+        news_items = [{
+            "id": "site-news-123",
+            "organisation_number": "999888777",
+            "signal_type": "dated_news",
+            "source_url": "https://test.no/nyheter/art1",
+            "published_at": "2025-09-22T20:00:00+02:00",
+            "text": "Bedre sosial funksjon",
+            "title": "Bedre sosial funksjon",
+        }]
+        profile["news_mentions"] = news_items
+        profile["dated_news"] = news_items
+        profile["news"] = news_items
+        profile["evidence"]["news"] = evidence(
+            "news", "available", "public_editorial_news", news_items[0]["source_url"], value=news_items
+        )
+        profile["evidence"]["dated_news"] = profile["evidence"]["news"]
+
+        # Verify hiring / hiring_signal contract
+        jobs = [{
+            "id": "site-job-123",
+            "organisation_number": "999888777",
+            "signal_type": "job_posting",
+            "source_url": "https://test.no/careers",
+            "url": "https://test.no/careers",
+            "title": "Ingeniør",
+        }]
+        profile["jobs"] = jobs
+        profile["hiring_signals"] = jobs
+        profile["hiring_signal"] = jobs
+        profile["hiring"] = {"status": "available", "signals": jobs, "count": 1}
+        profile["evidence"]["hiring"] = evidence(
+            "hiring", "available", "official_and_company_careers", jobs[0]["source_url"], value=jobs
+        )
+        profile["evidence"]["hiring_signal"] = profile["evidence"]["hiring"]
+
+        # Verify social_profiles contract
+        social = [
+            {"platform": "x", "url": "https://x.com/g3i_no"},
+            {"platform": "linkedin", "url": "https://linkedin.com/company/test"},
+        ]
+        profile["social_profiles"] = social
+        profile["social_profile"] = social
+        profile["social_links"] = social
+        profile["evidence"]["social_profiles"] = evidence(
+            "social_profiles", "available", "verified_company_website", social[0]["url"], value=social
+        )
+        profile["evidence"]["social_profile"] = profile["evidence"]["social_profiles"]
+
+        self.assertEqual(profile["dated_news"][0]["published_at"], "2025-09-22T20:00:00+02:00")
+        self.assertEqual(profile["evidence"]["dated_news"]["status"], "available")
+        self.assertEqual(profile["hiring_signal"][0]["url"], "https://test.no/careers")
+        self.assertEqual(profile["evidence"]["hiring_signal"]["status"], "available")
+        self.assertEqual(profile["social_profiles"][0]["url"], "https://x.com/g3i_no")
+        self.assertEqual(profile["evidence"]["social_profiles"]["status"], "available")
+
+
 if __name__ == "__main__":
     unittest.main()
 
