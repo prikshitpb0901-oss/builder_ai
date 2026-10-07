@@ -43,6 +43,23 @@ def parse_brave_web_results(payload: dict[str, Any], *, query: str) -> list[dict
     return parsed
 
 
+def parse_serper_web_results(payload: dict[str, Any], *, query: str) -> list[dict[str, Any]]:
+    results = payload.get("organic") or []
+    parsed = []
+    for rank, result in enumerate(results, start=1):
+        if not isinstance(result, dict) or not result.get("link"):
+            continue
+        parsed.append({
+            "url": result.get("link"),
+            "title": result.get("title") or "",
+            "snippet": result.get("snippet") or "",
+            "rank": result.get("position") or rank,
+            "provider": "serper_search_api",
+            "query": query,
+        })
+    return parsed
+
+
 def _tokens(value: Any) -> list[str]:
     text = str(value or "").translate(str.maketrans({"ø": "o", "å": "a", "æ": "ae", "Ø": "O", "Å": "A", "Æ": "AE"}))
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()

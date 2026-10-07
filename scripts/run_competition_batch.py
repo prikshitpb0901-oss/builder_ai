@@ -273,8 +273,40 @@ def main() -> None:
                                 b_data = json.loads(b_resp.read().decode("utf-8", errors="replace"))
                                 b_res = parse_brave_web_results(b_data, query=b_query)
                                 b_best = choose_search_candidate(profile, b_res)
-                                if b_best and b_best.get("url"):
-                                    cand_domains.append(b_best["url"])
+                                b_url_cand = (b_best.get("selected") or {}).get("url") or b_best.get("url")
+                                if b_url_cand:
+                                    cand_domains.append(b_url_cand)
+                        except Exception:
+                            pass
+
+                    # 1b. Optional Serper API accelerator (if API key configured in env)
+                    serper_key = os.getenv("SERPER_API_KEY") or os.getenv("SERPER_KEY")
+                    if serper_key and time.monotonic() < enrich_deadline:
+                        try:
+                            from norway_company_agent.discovery import build_company_search_query, parse_serper_web_results, choose_search_candidate
+                            s_query = build_company_search_query(profile)
+                            s_payload = json.dumps({
+                                "q": s_query,
+                                "gl": "no",
+                                "hl": "no",
+                                "num": 5,
+                            }).encode("utf-8")
+                            s_req = urllib.request.Request(
+                                "https://google.serper.dev/search",
+                                data=s_payload,
+                                headers={
+                                    "X-API-KEY": serper_key,
+                                    "Content-Type": "application/json",
+                                    "User-Agent": "builderr-signalpost-poc/0.1 (+https://builderr.ai)",
+                                },
+                            )
+                            with urllib.request.urlopen(s_req, timeout=2.5) as s_resp:
+                                s_data = json.loads(s_resp.read().decode("utf-8", errors="replace"))
+                                s_res = parse_serper_web_results(s_data, query=s_query)
+                                s_best = choose_search_candidate(profile, s_res)
+                                s_url_cand = (s_best.get("selected") or {}).get("url") or s_best.get("url")
+                                if s_url_cand:
+                                    cand_domains.append(s_url_cand)
                         except Exception:
                             pass
 

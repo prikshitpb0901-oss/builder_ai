@@ -1938,6 +1938,41 @@ class EvaluatorQualificationContractTests(unittest.TestCase):
         self.assertEqual(profile["social_profiles"][0]["url"], "https://x.com/g3i_no")
         self.assertEqual(profile["evidence"]["social_profiles"]["status"], "available")
 
+    def test_serper_web_results_parsing_and_candidate_choice(self):
+        from norway_company_agent.discovery import parse_serper_web_results, choose_search_candidate
+        payload = {
+            "searchParameters": {"q": '"Equinor ASA" 923609016 Stavanger'},
+            "organic": [
+                {
+                    "title": "Equinor ASA - Stavanger - 923609016",
+                    "link": "https://www.equinor.com",
+                    "snippet": "Offisiell side for Equinor ASA (org.nr 923609016) i Stavanger.",
+                    "position": 1,
+                },
+                {
+                    "title": "Equinor ASA på Proff",
+                    "link": "https://proff.no/selskap/equinor-asa/stavanger/olje-og-gass/IF4C20B0C26",
+                    "snippet": "Nøkkeltall for Equinor ASA 923609016.",
+                    "position": 2,
+                },
+            ],
+        }
+        query = '"Equinor ASA" 923609016 Stavanger'
+        parsed = parse_serper_web_results(payload, query=query)
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0]["provider"], "serper_search_api")
+        self.assertEqual(parsed[0]["url"], "https://www.equinor.com")
+
+        profile = {
+            "name": "EQUINOR ASA",
+            "organisation_number": "923609016",
+            "municipality": "Stavanger",
+        }
+        res = choose_search_candidate(profile, parsed)
+        self.assertIsNotNone(res["selected"])
+        self.assertEqual(res["selected"]["url"], "https://www.equinor.com/")
+        self.assertTrue(res["selected"]["publishable_candidate"])
+
 
 if __name__ == "__main__":
     unittest.main()
