@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -311,22 +312,28 @@ def main() -> None:
                             pass
 
                     # 2. Heuristic domain generation (zero API keys, evaluator-proof)
-                    if toks:
-                        clean_all = "".join(toks)
-                        cand_domains.extend([f"www.{clean_all}.no", f"{clean_all}.no", f"www.{clean_all}.com", f"{clean_all}.com"])
-                        if len(toks) > 1:
-                            clean_hyphen = "-".join(toks)
+                    name_raw = str(profile.get("name") or "").translate(str.maketrans({"ø": "o", "Ø": "O", "å": "a", "Å": "A", "æ": "ae", "Æ": "AE"}))
+                    name_norm = unicodedata.normalize("NFKD", name_raw).encode("ascii", "ignore").decode().casefold()
+                    name_stem = re.sub(r"\b(as|asa|ans|da|enk|iks|sa|sam|sti|stiftelsen|nuf|ks|kf|fkf)\b$", "", name_norm).strip()
+                    raw_name_toks = [t for t in re.findall(r"[a-z0-9]+", name_stem) if t]
+
+                    if raw_name_toks:
+                        clean_all = "".join(raw_name_toks)
+                        if len(clean_all) >= 3:
+                            cand_domains.extend([f"www.{clean_all}.no", f"{clean_all}.no"])
+                            from norway_company_agent.identity import GENERIC_INDUSTRY_WORDS
+                            if len(clean_all) >= 5 and clean_all not in GENERIC_INDUSTRY_WORDS:
+                                cand_domains.extend([f"www.{clean_all}.com", f"{clean_all}.com"])
+                        if len(raw_name_toks) > 1:
+                            clean_hyphen = "-".join(raw_name_toks)
                             cand_domains.extend([f"www.{clean_hyphen}.no", f"{clean_hyphen}.no"])
-                            c2_all = "".join(toks[:2])
-                            c2_hyphen = "-".join(toks[:2])
-                            cand_domains.extend([f"www.{c2_all}.no", f"{c2_all}.no", f"www.{c2_hyphen}.no", f"{c2_hyphen}.no"])
-                            acronym = "".join(t[0] for t in toks)
-                            if len(acronym) >= 2:
+                            c2_all = "".join(raw_name_toks[:2])
+                            c2_hyphen = "-".join(raw_name_toks[:2])
+                            if len(c2_all) >= 4:
+                                cand_domains.extend([f"www.{c2_all}.no", f"{c2_all}.no", f"www.{c2_hyphen}.no", f"{c2_hyphen}.no"])
+                            acronym = "".join(t[0] for t in raw_name_toks)
+                            if len(acronym) >= 3:
                                 cand_domains.extend([f"www.{acronym}.no", f"{acronym}.no"])
-                            if len(toks[0]) >= 3:
-                                cand_domains.extend([f"www.{toks[0]}.no", f"{toks[0]}.no", f"www.{toks[0]}.com", f"{toks[0]}.com"])
-                        elif len(toks[0]) >= 3:
-                            cand_domains.extend([f"www.{toks[0]}.no", f"{toks[0]}.no", f"www.{toks[0]}.com", f"{toks[0]}.com"])
 
                     seen_cands = set()
                     cand_domains = [c for c in cand_domains if not (c in seen_cands or seen_cands.add(c))]

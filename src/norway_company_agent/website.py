@@ -644,6 +644,13 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
         soup = BeautifulSoup(html, "lxml")
         structured = extruct.extract(html, base_url=final_url, syntaxes=["json-ld", "microdata", "opengraph"])
         text = trafilatura.extract(html, url=final_url, include_links=False, include_tables=False, favor_precision=True) or ""
+        if not text.strip():
+            text = soup.get_text(" ", strip=True) or ""
+        html_lower = html.lower()
+        has_norway_in_html = bool(
+            "norway" in html_lower or "norge" in html_lower or "+47" in html or
+            "organisasjonsnummer" in html_lower or "org.nr" in html_lower or "postboks" in html_lower
+        )
         title = soup.title.get_text(" ", strip=True) if soup.title else ""
         description_tag = soup.select_one('meta[name="description"], meta[property="og:description"]')
         description = str(description_tag.get("content") or "").strip() if description_tag else ""
@@ -673,6 +680,7 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
             "hiring_links": career_anchors[:5],
             "news_articles": homepage_news[:5],
             "social_links": _social_links(final_url, soup),
+            "has_norway_in_html": has_norway_in_html,
             "structured_organisations": _jsonld_organisations(structured),
             "content_sha256": __import__("hashlib").sha256(raw).hexdigest(),
             "extraction_state": _extraction_state(text, soup),

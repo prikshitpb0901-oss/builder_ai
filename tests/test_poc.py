@@ -1973,6 +1973,124 @@ class EvaluatorQualificationContractTests(unittest.TestCase):
         self.assertEqual(res["selected"]["url"], "https://www.equinor.com/")
         self.assertTrue(res["selected"]["publishable_candidate"])
 
+    def test_gate_issue_fail_closed_on_generic_or_empty_tokens_without_org_nr(self):
+        from norway_company_agent.identity import assess_website_identity
+        # Empty tokens fail closed
+        prof_empty = {"name": "AS", "organisation_number": "123456789", "evidence": {"website": {"status": "available", "value": {}}}}
+        res_empty = assess_website_identity(prof_empty)
+        self.assertFalse(res_empty["publishable"])
+        self.assertEqual(res_empty["status"], "rejected")
+
+        # All-generic tokens without org number fails closed
+        prof_generic = {
+            "name": "VINTAGE CAPITAL AS",
+            "organisation_number": "930355496",
+            "evidence": {
+                "website": {
+                    "status": "available",
+                    "source_class": "discovered_company_website",
+                    "source_url": "https://www.vintagecapital.com/",
+                    "value": {
+                        "final_url": "https://www.vintagecapital.com/",
+                        "title": "Vintage Capital Management",
+                        "main_text_excerpt": "Private equity investment firm based in Orlando.",
+                    },
+                }
+            },
+        }
+        res_generic = assess_website_identity(prof_generic)
+        self.assertFalse(res_generic["publishable"])
+        self.assertTrue(any("generic" in r or "non-.no" in r for r in res_generic["reasons"]))
+
+    def test_gate_issue_rejects_third_party_host_subpath_for_single_distinct_token(self):
+        from norway_company_agent.identity import assess_website_identity
+        # BRANDMAKER AS on uptempo.io/brandmaker/ MUST NOT pass as exact
+        prof_bm = {
+            "name": "BRANDMAKER AS",
+            "organisation_number": "982942942",
+            "evidence": {
+                "website": {
+                    "status": "available",
+                    "source_class": "discovered_company_website",
+                    "source_url": "https://www.uptempo.io/brandmaker/",
+                    "value": {
+                        "final_url": "https://www.uptempo.io/brandmaker/",
+                        "title": "BrandMaker is now Uptempo",
+                        "main_text_excerpt": "Uptempo provides marketing resource management software globally.",
+                    },
+                }
+            },
+        }
+        res_bm = assess_website_identity(prof_bm)
+        self.assertFalse(res_bm["publishable"])
+        self.assertNotEqual(res_bm["status"], "exact")
+
+    def test_gate_issue_quarantines_parked_page_with_parkering_path(self):
+        from norway_company_agent.identity import assess_website_identity
+        prof_parked = {
+            "name": "GUSTAVSEN INVEST AS",
+            "organisation_number": "912825124",
+            "evidence": {
+                "website": {
+                    "status": "available",
+                    "source_class": "discovered_company_website",
+                    "source_url": "https://www.webhuset.no/parkering",
+                    "value": {
+                        "final_url": "https://www.webhuset.no/parkering",
+                        "title": "Domene er parkert | Webhuset",
+                        "main_text_excerpt": "Dette domenet er parkert hos Webhuset.",
+                    },
+                }
+            },
+        }
+        res_parked = assess_website_identity(prof_parked)
+        self.assertFalse(res_parked["publishable"])
+        self.assertEqual(res_parked["status"], "quarantined_parked")
+
+    def test_gate_issue_requires_norway_corroboration_for_non_no_discovered_domain(self):
+        from norway_company_agent.identity import assess_website_identity
+        # Elopak on elopak.com passes because it has Norway corroboration and coined trademark
+        prof_elopak = {
+            "name": "ELOPAK ASA",
+            "organisation_number": "811413682",
+            "evidence": {
+                "website": {
+                    "status": "available",
+                    "source_class": "discovered_company_website",
+                    "source_url": "https://www.elopak.com/",
+                    "value": {
+                        "final_url": "https://www.elopak.com/",
+                        "title": "Elopak - Elopak",
+                        "has_norway_in_html": True,
+                        "main_text_excerpt": "Global carton packaging company originating in Norway.",
+                    },
+                }
+            },
+        }
+        res_elopak = assess_website_identity(prof_elopak)
+        self.assertTrue(res_elopak["publishable"])
+        self.assertEqual(res_elopak["status"], "exact")
+
+        # Generic .com domain with no Norway corroboration fails
+        prof_foreign = {
+            "name": "JOTT AS",
+            "organisation_number": "928238407",
+            "evidence": {
+                "website": {
+                    "status": "available",
+                    "source_class": "discovered_company_website",
+                    "source_url": "https://jott.com/",
+                    "value": {
+                        "final_url": "https://jott.com/",
+                        "title": "JOTT Official Store",
+                        "main_text_excerpt": "French jacket collection.",
+                    },
+                }
+            },
+        }
+        res_foreign = assess_website_identity(prof_foreign)
+        self.assertFalse(res_foreign["publishable"])
+
 
 if __name__ == "__main__":
     unittest.main()
