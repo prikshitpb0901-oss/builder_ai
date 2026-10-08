@@ -375,17 +375,18 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
                 "content_sha256": mod_rec.get("content_sha256"),
             })
 
-    # 6. Media coverage from news mentions
+    # 6. Media coverage from news mentions and statutory announcements
     news = profile.get("news_mentions") or profile.get("dated_news") or []
-    if news:
-        statutory = [item for item in news if item.get("platform") == "brreg_kunngjoringer"]
-        editorial = [item for item in news if item.get("platform") != "brreg_kunngjoringer"]
-        parts = []
-        if editorial:
-            ed_pubs = list({item.get("publisher", "unknown") for item in editorial})[:3]
-            parts.append(f"{len(editorial)} verified media/press article(s) found from: {', '.join(ed_pubs)}")
-        if statutory:
-            parts.append(f"{len(statutory)} statutory announcement(s) on file in Brønnøysundregistrene official gazette")
+    statutory_events = profile.get("statutory_events") or []
+    statutory = list(statutory_events) + [item for item in news if item.get("platform") == "brreg_kunngjoringer" and not any(s.get("id") == item.get("id") for s in statutory_events)]
+    editorial = [item for item in news if item.get("platform") != "brreg_kunngjoringer"]
+    parts = []
+    if editorial:
+        ed_pubs = list({item.get("publisher", "unknown") for item in editorial})[:3]
+        parts.append(f"{len(editorial)} verified media/press article(s) found from: {', '.join(ed_pubs)}")
+    if statutory:
+        parts.append(f"{len(statutory)} statutory announcement(s) on file in Brønnøysundregistrene official gazette")
+    if parts:
         media_coverage = ". ".join(parts) + "."
     else:
         media_coverage = "No verified news coverage discovered in monitored editorial media or company press releases."

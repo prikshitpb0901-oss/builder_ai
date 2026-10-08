@@ -84,6 +84,23 @@ CLICKBAIT_PATTERNS = [
 ]
 
 LEGAL_SUFFIXES = {"as", "asa", "sa", "ba", "da", "ans", "enk", "nuf", "sti", "hf", "iks", "kf", "brl", "holding", "eiendom"}
+CORPORATE_MODIFIERS = {
+    "holding", "eiendom", "eiendommer", "invest", "drift", "utvikling",
+    "forvaltning", "group", "gruppen", "norge", "norway", "avd", "avdeling", "vgs", "filial",
+}
+GENERIC_INDUSTRY_WORDS = {
+    "frakt", "transport", "logistikk", "klinikk", "klinikken", "tannlege", "tannlegene",
+    "regnskap", "revisjon", "okonomi", "advokat", "advokatene", "bygg", "anlegg",
+    "consulting", "consult", "it", "tech", "technology", "service", "services", "solutions",
+    "seafood", "fisk", "kjott", "mat", "kafe", "restaurant", "bar", "hotel", "hotell",
+    "capital", "kapital", "partner", "partners", "media", "design", "foto", "musikk", "kunst",
+    "helse", "terapi", "auto", "bil", "motor", "energi", "solar", "kraft", "kraftverk", "vind",
+    "marine", "shipping", "handel", "butikk", "shop", "online", "digital", "studio",
+    "arkitekt", "arkitekter", "frisor", "frisorer", "salong", "veterinar", "dyreklinikk",
+    "taxi", "buss", "renhold", "vask", "sikkerhet", "security", "miljo", "sport", "fitness",
+    "trening", "care", "pharma", "lab", "kjemi", "vintage", "equity", "fund", "funds",
+    "venture", "ventures", "finance", "global", "international", "sykehus", "kommune",
+}
 
 
 def extract_domain(url_or_domain: str) -> str:
@@ -162,6 +179,21 @@ def verify_entity_in_headline(company_name: str, title: str) -> dict[str, bool |
         elif n_base == 1 and (len(base_tokens[0]) >= 4 or any(ch in base_tokens[0] for ch in ("æ", "ø", "å"))):
             if base_tokens[0] in title_tokens:
                 return {"matched": True, "mode": "single_token_distinct_name"}
+
+    # Distinct tokens stripping corporate modifiers (e.g. 'Wyssen' for 'Wyssen Norge AS')
+    distinct_tokens = [t for t in base_tokens if t not in CORPORATE_MODIFIERS]
+    distinct_non_generic = [t for t in distinct_tokens if t not in GENERIC_INDUSTRY_WORDS]
+    if distinct_tokens and distinct_tokens != base_tokens:
+        if len(distinct_tokens) >= 2 and all(t in title_tokens for t in distinct_tokens):
+            return {"matched": True, "mode": "multi_token_base_name"}
+        if len(distinct_non_generic) == 1 and (len(distinct_non_generic[0]) >= 4 or any(ch in distinct_non_generic[0] for ch in ("æ", "ø", "å"))):
+            if distinct_non_generic[0] in title_tokens:
+                return {"matched": True, "mode": "single_token_distinct_name"}
+
+    # Fallback to single distinct non-generic token if multi-token contains generic words (e.g. 'Sunnaas' for 'Sunnaas Sykehus HF')
+    if len(distinct_non_generic) == 1 and (len(distinct_non_generic[0]) >= 4 or any(ch in distinct_non_generic[0] for ch in ("æ", "ø", "å"))):
+        if distinct_non_generic[0] in title_tokens:
+            return {"matched": True, "mode": "single_token_distinct_name"}
 
     return {"matched": False, "mode": "none"}
 

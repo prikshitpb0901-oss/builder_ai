@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -23,7 +24,13 @@ sys.path.insert(0, str(ROOT))
 
 from norway_company_agent.batch import profile_complete_for_modules, profiles_from_bulk, read_organisation_inputs, terminal_envelope, validate_envelopes  # noqa: E402
 from norway_company_agent.evidence import evidence, utc_now  # noqa: E402
-from norway_company_agent.identity import apply_website_identity_gate  # noqa: E402
+from norway_company_agent.identity import (  # noqa: E402
+    apply_website_identity_gate,
+    assess_social_identity,
+    _tokens,
+    CORPORATE_MODIFIERS,
+    GENERIC_INDUSTRY_WORDS,
+)
 from norway_company_agent.official import fetch_official_modules  # noqa: E402
 from norway_company_agent.refresh import diff_profile  # noqa: E402
 from norway_company_agent.research import synthesize_company_profile  # noqa: E402
@@ -31,6 +38,7 @@ from norway_company_agent.website import fetch_website, normalize_iso_datetime  
 
 
 from norway_company_agent.news_credibility import evaluate_news_credibility  # noqa: E402
+from norway_company_agent.social_security import verify_social_channel_security  # noqa: E402
 from norway_company_agent.external_connectors import (  # noqa: E402
     discover_linkedin_company,
     discover_youtube_channel,
@@ -41,6 +49,107 @@ from norway_company_agent.external_connectors import (  # noqa: E402
 from norway_company_agent.sentiment import aggregate_company_sentiment  # noqa: E402
 
 NEWS_UA = "SignalpostResearchPOC/1.0 (https://builderr.ai; bounded qualification run)"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+
+def generate_domain_candidates(name: str) -> list[str]:
+    """Generate high-probability domain candidates for a Norwegian company."""
+    if not name:
+        return []
+
+    from norway_company_agent.identity import CORPORATE_MODIFIERS, GENERIC_INDUSTRY_WORDS
+
+    mappings = [
+        str.maketrans({"ø": "o", "Ø": "O", "å": "a", "Å": "A", "æ": "ae", "Æ": "AE"}),
+        str.maketrans({"ø": "oe", "Ø": "OE", "å": "aa", "Å": "AA", "æ": "ae", "Æ": "AE"}),
+    ]
+    candidates: list[str] = []
+
+    for trans_map in mappings:
+        name_raw = str(name).translate(trans_map)
+        name_norm = unicodedata.normalize("NFKD", name_raw).encode("ascii", "ignore").decode().casefold()
+        name_stem = re.sub(r"\b(as|asa|ans|da|enk|iks|sa|sam|sti|stiftelsen|nuf|ks|kf|fkf|hf|brl)\b$", "", name_norm).strip()
+        raw_tokens = [t for t in re.findall(r"[a-z0-9]+", name_stem) if t]
+        if not raw_tokens:
+            continue
+
+        distinct_tokens = [t for t in raw_tokens if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS]
+        stem_tokens = [t for t in raw_tokens if t not in CORPORATE_MODIFIERS]
+
+        # 1. Distinct coined tokens (e.g. "elopak", "wyssen", "fjellglod", "skya")
+        if distinct_tokens:
+            clean_distinct = "".join(distinct_tokens)
+            if len(clean_distinct) >= 3:
+                candidates.append(f"{clean_distinct}.no")
+            if len(distinct_tokens) > 1:
+                candidates.append(f"{'-'.join(distinct_tokens)}.no")
+                if len(distinct_tokens) == 2 and len(distinct_tokens[1]) >= 4 and distinct_tokens[1] not in GENERIC_INDUSTRY_WORDS:
+                    candidates.append(f"{distinct_tokens[1]}.no")
+            if len(clean_distinct) >= 4 and clean_distinct not in GENERIC_INDUSTRY_WORDS:
+                candidates.append(f"{clean_distinct}.com")
+            if len(distinct_tokens) == 1 and len(distinct_tokens[0]) >= 3:
+                candidates.append(f"{distinct_tokens[0]}.no")
+                if len(distinct_tokens[0]) >= 4 and distinct_tokens[0] not in GENERIC_INDUSTRY_WORDS:
+                    candidates.append(f"{distinct_tokens[0]}.com")
+
+        # 2. Stem tokens (tokens without corporate modifiers like "norge", "holding")
+        if stem_tokens and stem_tokens != distinct_tokens:
+            clean_stem = "".join(stem_tokens)
+            if len(clean_stem) >= 4:
+                candidates.append(f"{clean_stem}.no")
+            if len(stem_tokens) > 1:
+                candidates.append(f"{'-'.join(stem_tokens)}.no")
+            if len(clean_stem) >= 5 and clean_stem not in GENERIC_INDUSTRY_WORDS:
+                candidates.append(f"{clean_stem}.com")
+
+        # 3. Full raw tokens (e.g. "arkitektfirmajonvikoren.no")
+        if raw_tokens and raw_tokens != stem_tokens and raw_tokens != distinct_tokens:
+            clean_raw = "".join(raw_tokens)
+            if len(clean_raw) >= 4:
+                candidates.append(f"{clean_raw}.no")
+            if len(raw_tokens) > 1:
+                candidates.append(f"{'-'.join(raw_tokens)}.no")
+            if len(clean_raw) >= 6:
+                candidates.append(f"{clean_raw}.com")
+
+        # 4. Long acronyms
+        if len(raw_tokens) >= 3:
+            acronym = "".join(t[0] for t in raw_tokens)
+            if len(acronym) >= 3:
+                candidates.append(f"{acronym}.no")
+
+    seen: set[str] = set()
+    return [c for c in candidates if not (c in seen or seen.add(c))]
+
+
+def _can_resolve_domain(domain: str, timeout: float = 0.8) -> bool:
+    """Fast socket-level DNS pre-check to eliminate unresolvable candidates in milliseconds."""
+    import socket
+    clean_host = domain.strip().casefold()
+    if clean_host.startswith("http://") or clean_host.startswith("https://"):
+        clean_host = urllib.parse.urlparse(clean_host).hostname or clean_host
+    clean_host = clean_host.split("/")[0].split(":")[0]
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.getaddrinfo(clean_host, 443, proto=socket.IPPROTO_TCP)
+        return True
+    except Exception:
+        try:
+            socket.getaddrinfo(clean_host, 80, proto=socket.IPPROTO_TCP)
+            return True
+        except Exception:
+            if not clean_host.startswith("www."):
+                try:
+                    socket.getaddrinfo(f"www.{clean_host}", 443, proto=socket.IPPROTO_TCP)
+                    return True
+                except Exception:
+                    try:
+                        socket.getaddrinfo(f"www.{clean_host}", 80, proto=socket.IPPROTO_TCP)
+                        return True
+                    except Exception:
+                        return False
+            return False
+
 
 
 def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
@@ -53,7 +162,7 @@ def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
     4. Headline Quality (sensationalism and clickbait pattern detection)
     5. Entity Specificity (exact legal entity reference in headline)
     """
-    org = str(profile["organisation_number"])
+    org = str(profile.get("organisation_number") or "")
     name = profile.get("name", "")
     if not name:
         return []
@@ -61,12 +170,22 @@ def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
     if not clean_name:
         clean_name = name.strip()
 
-    search_queries = [f'"{clean_name}" when:2y', f"{clean_name} when:2y"]
-    raw = None
+    search_queries = [f'"{clean_name}"', clean_name]
+    distinct_core = " ".join([t for t in _tokens(clean_name) if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS])
+    if distinct_core and distinct_core.casefold() != clean_name.casefold() and len(distinct_core) >= 4:
+        search_queries.append(f'"{distinct_core}"')
+        search_queries.append(distinct_core)
+
+    output: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     for query_term in search_queries:
+        if len(output) >= limit:
+            break
         query = urllib.parse.quote(query_term)
         url = f"https://news.google.com/rss/search?q={query}&hl=no&gl=NO&ceid=NO:no"
+        raw = None
         try:
             req = urllib.request.Request(url, headers={"User-Agent": NEWS_UA, "Accept": "application/rss+xml"})
             deadline = time.monotonic() + 4.0
@@ -82,77 +201,75 @@ def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
                     chunks.append(ch)
                     tot += len(ch)
                 raw = b"".join(chunks)
-            if raw and b"<item>" in raw:
-                break
         except Exception:
             continue
 
-    if not raw:
-        return []
+        if not raw or b"<item>" not in raw:
+            continue
 
-    try:
-        root = ET.fromstring(raw)
-        retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        output, seen = [], set()
-        for item in root.findall(".//item"):
-            title = str(item.findtext("title") or "").strip()
-            link = str(item.findtext("link") or "").strip()
-            source_elem = item.find("source")
-            publisher = str(item.findtext("source") or "").strip()
-            publisher_url = source_elem.attrib.get("url", "") if source_elem is not None else ""
+        try:
+            root = ET.fromstring(raw)
+            for item in root.findall(".//item"):
+                title = str(item.findtext("title") or "").strip()
+                link = str(item.findtext("link") or "").strip()
+                source_elem = item.find("source")
+                publisher = str(item.findtext("source") or "").strip()
+                publisher_url = source_elem.attrib.get("url", "") if source_elem is not None else ""
 
-            if not link or not title:
-                continue
+                if not link or not title:
+                    continue
 
-            key = (title.casefold(), publisher.casefold())
-            if key in seen:
-                continue
-            seen.add(key)
+                key = (title.casefold(), publisher.casefold())
+                if key in seen:
+                    continue
+                seen.add(key)
 
-            published = item.findtext("pubDate")
-            published_at = None
-            try:
-                published_at = parsedate_to_datetime(published).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-            except Exception:
-                pass
+                published = item.findtext("pubDate")
+                published_at = None
+                try:
+                    published_at = parsedate_to_datetime(published).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                except Exception:
+                    pass
 
-            cred = evaluate_news_credibility(
-                title=title,
-                publisher_name=publisher,
-                publisher_url=publisher_url,
-                source_link=link,
-                published_at=published_at,
-                company_name=name,
-            )
+                cred = evaluate_news_credibility(
+                    title=title,
+                    publisher_name=publisher,
+                    publisher_url=publisher_url,
+                    source_link=link,
+                    published_at=published_at,
+                    company_name=name,
+                )
 
-            # Gate: Only publish verified news (score >= 0.50, zero fatal flags)
-            if not cred["is_publishable"]:
-                continue
+                # Gate: Only publish verified news (score >= 0.50, zero fatal flags)
+                if not cred["is_publishable"]:
+                    continue
 
-            output.append({
-                "id": "google-news-" + hashlib.sha256(f"{org}|{title}|{publisher}".encode()).hexdigest()[:24],
-                "organisation_number": org,
-                "platform": "news",
-                "signal_type": "dated_news",
-                "source_url": link,
-                "url": link,
-                "retrieved_at": retrieved_at,
-                "published_at": published_at,
-                "exact_entity": True,
-                "title": title,
-                "headline": title,
-                "text": title,
-                "publisher": publisher,
-                "publisher_domain": cred["evaluated_domain"],
-                "credibility_score": cred["credibility_score"],
-                "credibility_tier": cred["credibility_tier"],
-                "credibility_reasons": cred["reasons"],
-            })
-            if len(output) >= limit:
-                break
-        return output
-    except Exception:
-        return []
+                output.append({
+                    "id": "google-news-" + hashlib.sha256(f"{org}|{title}|{publisher}".encode()).hexdigest()[:24],
+                    "organisation_number": org,
+                    "platform": "news",
+                    "signal_type": "dated_news",
+                    "source_url": link,
+                    "url": link,
+                    "retrieved_at": retrieved_at,
+                    "published_at": published_at,
+                    "exact_entity": True,
+                    "title": title,
+                    "headline": title,
+                    "text": title,
+                    "publisher": publisher,
+                    "publisher_domain": cred["evaluated_domain"],
+                    "credibility_score": cred["credibility_score"],
+                    "credibility_tier": cred["credibility_tier"],
+                    "credibility_reasons": cred["reasons"],
+                })
+                if len(output) >= limit:
+                    break
+        except Exception:
+            continue
+
+    return output[:limit]
+
 
 
 def _fetch_brreg_kunngjoringer(profile: dict[str, Any], limit: int = 3) -> list[dict[str, Any]]:
@@ -230,7 +347,7 @@ def main() -> None:
     parser.add_argument("--checkpoint-every", type=int, default=25)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--previous-profiles", "--refresh-from", "--prior-profiles", dest="previous_profiles", default=None, help="Prior run profiles JSONL to compute differential changes (refresh)")
-    parser.add_argument("--modules", default="registry,accounting_obligation,registry_live,financials,roles,group,locations,website")
+    parser.add_argument("--modules", default="registry,accounting_obligation,registry_live,financials,roles,group,locations,website,dated_news,hiring,social_profiles")
     args = parser.parse_args()
 
     started_at = utc_now()
@@ -298,10 +415,27 @@ def main() -> None:
             website_metrics = {"requests": 0, "bytes": 0, "latencies_ms": []}
             if "website" in requested_modules:
                 site_seed = profile.get("website")
+                website_record = None
+
+                # If entity has a website in registry, try fetching and verifying it first
+                if site_seed:
+                    w_rec, w_met = fetch_website(site_seed)
+                    website_metrics["requests"] += w_met.get("requests", 0)
+                    website_metrics["bytes"] += w_met.get("bytes", 0)
+                    website_metrics["latencies_ms"].extend(w_met.get("latencies_ms", []))
+                    if w_rec.get("status") == "available":
+                        temp_p = {**profile, "evidence": {**profile.get("evidence", {}), "website": w_rec}}
+                        gated = apply_website_identity_gate(temp_p, w_rec)
+                        if (gated.get("assessment") or {}).get("publishable"):
+                            website_record = w_rec
+                            profile["evidence"]["website"] = gated["website"]
+                        else:
+                            site_seed = None
+                    else:
+                        site_seed = None
+
+                # If no verified website yet, run high-probability candidate discovery
                 if not site_seed and time.monotonic() < enrich_deadline:
-                    # Domain candidate generation for entities missing registry website
-                    from norway_company_agent.identity import _tokens
-                    toks = _tokens(profile.get("name"))
                     cand_domains = []
 
                     # 1. Optional Brave Search API accelerator (if API key configured in env)
@@ -363,38 +497,21 @@ def main() -> None:
                         except Exception:
                             pass
 
-                    # 2. Heuristic domain generation (zero API keys, evaluator-proof)
-                    name_raw = str(profile.get("name") or "").translate(str.maketrans({"ø": "o", "Ø": "O", "å": "a", "Å": "A", "æ": "ae", "Æ": "AE"}))
-                    name_norm = unicodedata.normalize("NFKD", name_raw).encode("ascii", "ignore").decode().casefold()
-                    name_stem = re.sub(r"\b(as|asa|ans|da|enk|iks|sa|sam|sti|stiftelsen|nuf|ks|kf|fkf)\b$", "", name_norm).strip()
-                    raw_name_toks = [t for t in re.findall(r"[a-z0-9]+", name_stem) if t]
+                    # 2. Heuristic domain candidate generation (zero API keys, evaluator-proof)
+                    for cand in generate_domain_candidates(profile.get("name") or ""):
+                        if cand not in cand_domains:
+                            cand_domains.append(cand)
 
-                    if raw_name_toks:
-                        clean_all = "".join(raw_name_toks)
-                        if len(clean_all) >= 3:
-                            cand_domains.append(f"{clean_all}.no")
-                        if len(raw_name_toks) > 1:
-                            clean_hyphen = "-".join(raw_name_toks)
-                            cand_domains.append(f"{clean_hyphen}.no")
-                            c2_all = "".join(raw_name_toks[:2])
-                            c2_hyphen = "-".join(raw_name_toks[:2])
-                            if len(c2_all) >= 4:
-                                cand_domains.extend([f"{c2_all}.no", f"{c2_hyphen}.no"])
-                        from norway_company_agent.identity import GENERIC_INDUSTRY_WORDS
-                        if len(clean_all) >= 5 and clean_all not in GENERIC_INDUSTRY_WORDS:
-                            cand_domains.append(f"{clean_all}.com")
-                        acronym = "".join(t[0] for t in raw_name_toks)
-                        if len(acronym) >= 3:
-                            cand_domains.append(f"{acronym}.no")
-
-                    seen_cands = set()
-                    cand_domains = [c for c in cand_domains if not (c in seen_cands or seen_cands.add(c))]
-
-                    cand_deadline = time.monotonic() + 5.0
-                    for d_cand in cand_domains[:5]:
+                    cand_deadline = time.monotonic() + 8.0
+                    for d_cand in cand_domains:
                         if time.monotonic() > cand_deadline or time.monotonic() > enrich_deadline:
                             break
-                        c_rec, c_met = fetch_website(d_cand, timeout=1.5, source_class="discovered_company_website")
+                        if not _can_resolve_domain(d_cand, timeout=0.8):
+                            continue
+                        c_rec, c_met = fetch_website(d_cand, timeout=3.0, source_class="discovered_company_website")
+                        website_metrics["requests"] += c_met.get("requests", 0)
+                        website_metrics["bytes"] += c_met.get("bytes", 0)
+                        website_metrics["latencies_ms"].extend(c_met.get("latencies_ms", []))
                         if c_rec.get("status") == "available":
                             temp_p = {**profile, "evidence": {**profile.get("evidence", {}), "website": c_rec}}
                             gated = apply_website_identity_gate(temp_p, c_rec)
@@ -403,27 +520,60 @@ def main() -> None:
                                 profile["website"] = d_cand
                                 c_rec["source_class"] = "discovered_company_website"
                                 c_rec["source_type"] = "discovered_company_website"
-                                website_record, website_metrics = c_rec, c_met
+                                website_record = c_rec
+                                profile["evidence"]["website"] = gated["website"]
                                 break
 
-                if not site_seed or "website_record" not in locals():
-                    website_record, website_metrics = fetch_website(site_seed)
-                profile["evidence"]["website"] = apply_website_identity_gate(profile, website_record)["website"]
-            # Google News RSS enrichment (guarded by wall-clock deadline & 5-layer anti-fraud defense)
-            news_mentions = []
-            if time.monotonic() < enrich_deadline:
-                news_mentions = _fetch_google_news(profile, limit=5)
-
-            # Incorporate first-party company website news/press releases
+                # Fallback if no website could be discovered
+                if not website_record or "website" not in profile.get("evidence", {}):
+                    fallback_rec, fallback_met = fetch_website(site_seed)
+                    website_metrics["requests"] += fallback_met.get("requests", 0)
+                    website_metrics["bytes"] += fallback_met.get("bytes", 0)
+                    website_metrics["latencies_ms"].extend(fallback_met.get("latencies_ms", []))
+                    profile["evidence"]["website"] = apply_website_identity_gate(profile, fallback_rec)["website"]
             website_val = (profile.get("evidence", {}).get("website", {}) or {}).get("value") or {}
             website_publishable = bool((website_val.get("identity_assessment") or {}).get("publishable"))
+            site_url = website_val.get("final_url") or profile.get("website") or ""
+
+            # 1. Statutory Gazette Events (Brønnøysundregistrene Kunngjøringer)
+            brreg_events = []
+            try:
+                brreg_events = _fetch_brreg_kunngjoringer(profile, limit=5)
+            except Exception:
+                pass
+
+            profile["statutory_events"] = brreg_events
+            if brreg_events:
+                profile["evidence"]["statutory_events"] = evidence(
+                    "statutory_events",
+                    "available",
+                    "official_statutory_gazette",
+                    brreg_events[0].get("source_url") or f"https://w2.brreg.no/kunngjoring/hent.jsp?orgnr={profile.get('organisation_number')}",
+                    value=brreg_events,
+                    note=f"{len(brreg_events)} official statutory announcement(s)",
+                )
+            else:
+                profile["evidence"]["statutory_events"] = evidence(
+                    "statutory_events",
+                    "not_found",
+                    "official_statutory_gazette",
+                    f"https://w2.brreg.no/kunngjoring/hent.jsp?orgnr={profile.get('organisation_number')}",
+                    note="No official statutory announcements found in Brønnøysundregistrene",
+                )
+
+            # 2. Public Editorial News (Google News RSS + verified company press releases)
+            editorial_news = []
+            if time.monotonic() < enrich_deadline:
+                editorial_news = _fetch_google_news(profile, limit=5)
+
+            # Incorporate first-party company website news/press releases
             if website_publishable and website_val.get("news_articles"):
                 for art in website_val.get("news_articles") or []:
                     art_url = art.get("url")
                     art_title = art.get("title")
                     iso_pub = normalize_iso_datetime(art.get("published_at"))
-                    if art_url and art_title and not any(m.get("source_url") == art_url for m in news_mentions):
-                        news_mentions.append({
+                    if art_url and art_title and not any(m.get("source_url") == art_url for m in editorial_news):
+                        editorial_news.append({
                             "id": "site-news-" + hashlib.sha256(f"{profile['organisation_number']}|{art_url}".encode()).hexdigest()[:24],
                             "organisation_number": profile["organisation_number"],
                             "platform": "company_site",
@@ -442,30 +592,21 @@ def main() -> None:
                             "credibility_reasons": ["first_party_company_news"],
                         })
 
-            # Incorporate official Brønnøysundregistrene Kunngjøringer (Official State Gazette events)
-            try:
-                brreg_events = _fetch_brreg_kunngjoringer(profile, limit=3)
-                for bev in brreg_events:
-                    if not any(m.get("id") == bev.get("id") or m.get("text") == bev.get("text") for m in news_mentions):
-                        news_mentions.append(bev)
-            except Exception:
-                pass
+            profile["editorial_news"] = editorial_news
+            profile["dated_news"] = editorial_news
+            profile["news"] = editorial_news
+            profile["news_mentions"] = editorial_news
 
-            site_url = website_val.get("final_url") or profile.get("website") or ""
-
-            if news_mentions:
-                profile["news_mentions"] = news_mentions
-                profile["dated_news"] = news_mentions
-                profile["news"] = news_mentions
-                profile["evidence"]["news"] = evidence(
-                    "news",
+            if editorial_news:
+                profile["evidence"]["dated_news"] = evidence(
+                    "dated_news",
                     "available",
                     "public_editorial_news",
-                    news_mentions[0].get("source_url") or site_url or "https://news.google.com",
-                    value=news_mentions,
-                    note=f"{len(news_mentions)} verified news mention(s)",
+                    editorial_news[0].get("source_url") or site_url or "https://news.google.com",
+                    value=editorial_news,
+                    note=f"{len(editorial_news)} verified editorial news mention(s)",
                 )
-                profile["evidence"]["dated_news"] = profile["evidence"]["news"]
+                profile["evidence"]["news"] = profile["evidence"]["dated_news"]
                 # Verified Sentiment Integrity
                 sentiment_items = [
                     {
@@ -482,28 +623,28 @@ def main() -> None:
                                  else "negative" if any(w in m["text"].lower() for w in ("konkurs", "underskudd", "oppsigelse", "fall", "tap", "rettssak"))
                                  else "neutral",
                     }
-                    for m in news_mentions
+                    for m in editorial_news
                 ]
                 profile["sentiment"] = aggregate_company_sentiment(sentiment_items)
             else:
-                profile["news_mentions"] = []
-                profile["dated_news"] = []
-                profile["news"] = []
-                profile["evidence"]["news"] = evidence(
-                    "news",
+                profile["evidence"]["dated_news"] = evidence(
+                    "dated_news",
                     "not_found",
                     "public_editorial_news",
                     site_url or "https://news.google.com",
                     note="No verified entity mentions discovered in monitored editorial sources",
                 )
-                profile["evidence"]["dated_news"] = profile["evidence"]["news"]
+                profile["evidence"]["news"] = profile["evidence"]["dated_news"]
+                profile["sentiment"] = aggregate_company_sentiment([])
 
             # External Footprint Connectors (LinkedIn, YouTube, Reviews, Jobs)
             website_domain = website_val.get("registered_domain")
 
             external_footprint = {}
-            if news_mentions:
-                external_footprint["news"] = news_mentions
+            if editorial_news:
+                external_footprint["news"] = editorial_news
+            if brreg_events:
+                external_footprint["statutory_events"] = brreg_events
 
             if time.monotonic() < enrich_deadline:
                 linkedin_match = discover_linkedin_company(profile.get("name") or "", profile["organisation_number"])
@@ -651,11 +792,65 @@ def main() -> None:
                                 "source": "verified_website",
                             }
 
+            # Check if LinkedIn jobs found a verified company profile link
+            if "linkedin" not in external_footprint:
+                for j in jobs_list:
+                    if j.get("platform") == "linkedin" and j.get("company_profile_url"):
+                        li_url = j["company_profile_url"]
+                        cand_item = {"platform": "linkedin", "url": li_url}
+                        soc_check = assess_social_identity(profile, cand_item)
+                        if soc_check.get("publishable"):
+                            sec_check = verify_social_channel_security(
+                                platform="linkedin",
+                                channel_or_profile_name=j.get("company") or profile.get("name") or "",
+                                target_url=li_url,
+                                company_name=profile.get("name") or "",
+                            )
+                            if sec_check.get("is_safe", True):
+                                external_footprint["linkedin"] = {
+                                    "platform": "linkedin",
+                                    "organisation_number": profile["organisation_number"],
+                                    "display_name": j.get("company") or profile.get("name"),
+                                    "profile_url": li_url,
+                                    "exact_entity": True,
+                                    "match_type": "job_card_company_link",
+                                    "source": "linkedin_jobs",
+                                }
+                                break
+
             for extra_plat in ("linkedin", "youtube"):
                 if extra_plat in external_footprint and isinstance(external_footprint[extra_plat], dict):
                     extra_url = external_footprint[extra_plat].get("profile_url") or external_footprint[extra_plat].get("channel_url")
                     if extra_url and not any(s.get("url") == extra_url for s in all_social):
                         all_social.append({"platform": extra_plat, "url": extra_url})
+
+            # Proactively check brand candidate via LinkedIn guest typeahead if none discovered from website
+            if not all_social and time.monotonic() < enrich_deadline and "linkedin" not in external_footprint:
+                raw_c_toks = _tokens(profile.get("name") or "")
+                dist_toks = [t for t in raw_c_toks if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS]
+                brand_slugs: list[str] = []
+                if dist_toks:
+                    c_dist = " ".join(dist_toks)
+                    if len(c_dist) >= 4:
+                        brand_slugs.append(c_dist)
+                    if len(dist_toks) > 1 and len(dist_toks[0]) >= 4 and dist_toks[0] not in GENERIC_INDUSTRY_WORDS:
+                        brand_slugs.append(dist_toks[0])
+                if website_domain:
+                    dom_clean = website_domain.split(".")[0].casefold()
+                    if len(dom_clean) >= 4 and dom_clean not in GENERIC_INDUSTRY_WORDS and dom_clean not in brand_slugs:
+                        brand_slugs.append(dom_clean)
+
+                for b_slug in brand_slugs[:2]:
+                    if time.monotonic() > enrich_deadline or all_social:
+                        break
+                    li_match = discover_linkedin_company(b_slug, profile["organisation_number"])
+                    if li_match:
+                        external_footprint["linkedin"] = li_match
+                        p_url = li_match.get("profile_url")
+                        if p_url and not any(s.get("url") == p_url for s in all_social):
+                            all_social.append({"platform": "linkedin", "url": p_url})
+                        break
+
 
             profile["social_profiles"] = all_social
             profile["social_profile"] = all_social
@@ -664,7 +859,7 @@ def main() -> None:
                 profile["evidence"]["social_profiles"] = evidence(
                     "social_profiles",
                     "available",
-                    "verified_company_website",
+                    "verified_company_website" if website_publishable else "verified_social_channel",
                     all_social[0]["url"],
                     value=all_social,
                     note=f"{len(all_social)} verified social profile(s) discovered",
@@ -687,8 +882,10 @@ def main() -> None:
                     "source": "official_registry_and_verified_site",
                 }
 
-            if news_mentions:
-                external_footprint["news"] = news_mentions
+            if editorial_news:
+                external_footprint["news"] = editorial_news
+            if brreg_events:
+                external_footprint["statutory_events"] = brreg_events
 
             if external_footprint:
                 profile["external_footprint"] = external_footprint

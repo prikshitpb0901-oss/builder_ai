@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20261008035714",
-  "started_at": "2026-10-08T03:57:14.574727Z",
-  "completed_at": "2026-10-08T04:02:58.917204Z",
+  "run_id": "run-20261008141056",
+  "started_at": "2026-10-08T14:10:56.094736Z",
+  "completed_at": "2026-10-08T14:14:29.145118Z",
   "expected_count": 100,
   "emitted_envelopes": 100,
   "resumed_profiles": 0,
@@ -14,7 +14,10 @@
     "roles",
     "group",
     "locations",
-    "website"
+    "website",
+    "dated_news",
+    "hiring",
+    "social_profiles"
   ],
   "registry": {
     "registry_snapshot_sha256": "1c89710e5b01f8617e86d09fbdff4a52f2f8dbbba297e74f7164b5984f5a0384",
@@ -23,15 +26,15 @@
     "selected": 100
   },
   "operations": {
-    "requests": 1112,
-    "bytes": 975737,
-    "p50_ms": 1198,
-    "p95_ms": 5653
+    "requests": 1788,
+    "bytes": 22354507,
+    "p50_ms": 1054,
+    "p95_ms": 3006
   },
   "refresh": {
-    "prior_profiles_provided": true,
-    "changes_detected": 49,
-    "profiles_with_changes": 20
+    "prior_profiles_provided": false,
+    "changes_detected": 0,
+    "profiles_with_changes": 0
   },
   "validation": {
     "passed": true,

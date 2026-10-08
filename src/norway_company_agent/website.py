@@ -42,6 +42,14 @@ PRIORITY_TERMS = (
     "team", "people", "locations", "lokasjoner", "avdelinger", "butikker",
 )
 
+KNOWN_ATS_DOMAINS = {
+    "teamtailor.com", "webcruiter.no", "webcruiter.com", "jobbnorge.no",
+    "recman.no", "recman.io", "reachmee.com", "easycruit.com",
+    "workbuster.com", "greenhouse.io", "lever.co", "bamboohr.com",
+    "finn.no", "empirix.no", "homerun.co", "workable.com",
+}
+
+
 
 
 # Ensure global socket operations have a strict timeout to prevent indefinite hangs
@@ -563,16 +571,25 @@ def _fetch_secondary_page(url: str, *, homepage_domain: str, timeout: float, max
             "main_text_excerpt": page_text[:5000],
             "content_sha256": __import__("hashlib").sha256(raw).hexdigest(),
         }
+        sec_jobs = _extract_job_postings(final_url, page_soup)
         sec_hiring = []
+        for j in sec_jobs:
+            if j.get("url") and j["url"] not in sec_hiring:
+                sec_hiring.append(j["url"])
         for anchor in page_soup.select("a[href]"):
-            ahref = str(anchor.get("href") or "").lower()
+            href = str(anchor.get("href") or "").strip()
+            ahref = href.lower()
             atext = anchor.get_text(" ", strip=True).lower()
-            if any(term in ahref or term in atext for term in ("karriere", "career", "jobb", "ledige-stillinger", "stillinger", "stilling", "work-with-us")):
-                c_url = urllib.parse.urljoin(final_url, str(anchor.get("href")))
-                if c_url not in sec_hiring:
-                    sec_hiring.append(c_url)
+            full_u = urllib.parse.urljoin(final_url, href)
+            u_host = (urllib.parse.urlparse(full_u).hostname or "").lower().removeprefix("www.")
+            is_ats = any(u_host == d or u_host.endswith("." + d) for d in KNOWN_ATS_DOMAINS)
+            is_career_term = any(term in ahref or term in atext for term in ("karriere", "career", "jobb", "ledige-stillinger", "stillinger", "stilling", "work-with-us"))
+            if is_ats or is_career_term:
+                if full_u not in sec_hiring:
+                    sec_hiring.append(full_u)
         sec_news = _extract_dated_news_articles(final_url, page_soup)
-        return page, _social_links(final_url, page_soup), sec_hiring[:5], sec_news[:5], 2, len(raw), elapsed, None
+        page["job_postings"] = sec_jobs
+        return page, _social_links(final_url, page_soup), sec_hiring[:8], sec_news[:5], 2, len(raw), elapsed, None
     except Exception as exc:
         return None, [], [], [], 2, 0, int((time.monotonic() - started) * 1000), f"{type(exc).__name__}: {str(exc)[:120]}"
 
@@ -662,12 +679,16 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
             if j.get("url") and j["url"] not in career_anchors:
                 career_anchors.append(j["url"])
         for anchor in soup.select("a[href]"):
-            ahref = str(anchor.get("href") or "").lower()
+            href = str(anchor.get("href") or "").strip()
+            ahref = href.lower()
             atext = anchor.get_text(" ", strip=True).lower()
-            if any(term in ahref or term in atext for term in ("karriere", "career", "jobb", "ledige-stillinger", "stillinger", "stilling", "work-with-us")):
-                c_url = urllib.parse.urljoin(final_url, str(anchor.get("href")))
-                if c_url not in career_anchors:
-                    career_anchors.append(c_url)
+            full_u = urllib.parse.urljoin(final_url, href)
+            u_host = (urllib.parse.urlparse(full_u).hostname or "").lower().removeprefix("www.")
+            is_ats = any(u_host == d or u_host.endswith("." + d) for d in KNOWN_ATS_DOMAINS)
+            is_career_term = any(term in ahref or term in atext for term in ("karriere", "career", "jobb", "ledige-stillinger", "stillinger", "stilling", "work-with-us"))
+            if is_ats or is_career_term:
+                if full_u not in career_anchors:
+                    career_anchors.append(full_u)
         homepage_news = _extract_dated_news_articles(final_url, soup)
         value = {
             "requested_url": normalized,
@@ -677,7 +698,7 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
             "description": description[:2000],
             "main_text_excerpt": text[:5000],
             "footer_text": footer_text[:2000],
-            "hiring_links": career_anchors[:5],
+            "hiring_links": career_anchors[:8],
             "news_articles": homepage_news[:5],
             "social_links": _social_links(final_url, soup),
             "has_norway_in_html": has_norway_in_html,
@@ -689,6 +710,7 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
         social = value["social_links"]
         all_hiring = list(career_anchors)
         all_news = list(homepage_news)
+        all_jobs = list(homepage_jobs)
         crawl_errors = []
         requests = 2
         bytes_received = len(raw)
@@ -708,6 +730,9 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
             if page:
                 pages.append(page)
                 social.extend(page_social)
+                for j in page.get("job_postings") or []:
+                    if not any(existing.get("url") == j.get("url") for existing in all_jobs):
+                        all_jobs.append(j)
                 for h in page_hiring:
                     if h not in all_hiring:
                         all_hiring.append(h)
@@ -807,7 +832,7 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
         value["pages"] = pages
         value["social_links"] = list({(item["platform"], item["url"]): item for item in social}.values())
         value["hiring_links"] = all_hiring[:8]
-        value["job_postings"] = homepage_jobs[:8]
+        value["job_postings"] = all_jobs[:8]
         value["news_articles"] = all_news[:8]
         value["crawl_errors"] = crawl_errors
         return evidence("website", "available", source_class, final_url, value=value, note="Company-controlled claim layer; not an official registry fact", content_sha256=value["content_sha256"]), {"requests": requests, "bytes": bytes_received, "latencies_ms": page_latencies}

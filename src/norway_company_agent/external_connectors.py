@@ -17,6 +17,7 @@ import urllib.request
 from typing import Any
 
 from .social_security import verify_social_channel_security
+from .identity import _tokens, CORPORATE_MODIFIERS, GENERIC_INDUSTRY_WORDS
 
 LEGAL_SUFFIXES = {
     "as", "asa", "ba", "da", "enk", "iks", "nuf", "sa", "sam",
@@ -56,9 +57,10 @@ class CircuitBreaker:
                 self.opened_at = time.monotonic()
 
 
-_LI_CIRCUIT = CircuitBreaker(failure_threshold=3, cooldown_seconds=20.0)
-_REVIEWS_CIRCUIT = CircuitBreaker(failure_threshold=3, cooldown_seconds=20.0)
-_JOBS_CIRCUIT = CircuitBreaker(failure_threshold=3, cooldown_seconds=20.0)
+_LI_CIRCUIT = CircuitBreaker(failure_threshold=10, cooldown_seconds=10.0)
+_REVIEWS_CIRCUIT = CircuitBreaker(failure_threshold=10, cooldown_seconds=10.0)
+_JOBS_CIRCUIT = CircuitBreaker(failure_threshold=10, cooldown_seconds=10.0)
+
 
 
 def _read_bounded_with_deadline(response: Any, max_bytes: int, deadline: float) -> bytes:
@@ -94,7 +96,7 @@ def _normalize_name(value: str) -> str:
 def discover_linkedin_company(company_name: str, org_number: str, timeout: float = 2.0) -> dict[str, Any] | None:
     """Discover verified LinkedIn company profile via LinkedIn guest typeahead.
 
-    Strict entity gate: requires exact normalized legal core match.
+    Strict entity gate: requires exact normalized legal core match or distinct brand match.
     """
     if not company_name or not _LI_CIRCUIT.is_available():
         return None
@@ -103,9 +105,14 @@ def discover_linkedin_company(company_name: str, org_number: str, timeout: float
     if not legal_core:
         return None
 
+    distinct_tokens = [t for t in _tokens(company_name) if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS]
+    distinct_brand = " ".join(distinct_tokens)
+
     queries = [company_name.strip()]
     if legal_core and legal_core.casefold() != company_name.strip().casefold():
         queries.append(legal_core)
+    if distinct_brand and len(distinct_brand) >= 4 and distinct_brand.casefold() not in [q.casefold() for q in queries]:
+        queries.append(distinct_brand)
 
     try:
         for q_idx, query_candidate in enumerate(queries):
@@ -130,27 +137,36 @@ def discover_linkedin_company(company_name: str, org_number: str, timeout: float
             if not isinstance(data, list):
                 continue
 
-            # Look for exact core match
+            # Look for exact core or distinct brand match
             for item in data:
                 if item.get("type") != "COMPANY" or not item.get("id"):
                     continue
                 display_name = str(item.get("displayName") or "")
                 candidate_core = _normalize_name(display_name)
 
+                match_type = None
                 if candidate_core == legal_core:
-                    # Specificity guard for secondary core query: require multi-word or len >= 6 or norwegian chars
-                    if q_idx > 0:
-                        words = legal_core.split()
+                    match_type = "exact_legal_core"
+                elif distinct_brand and candidate_core == distinct_brand and len(distinct_brand) >= 4:
+                    match_type = "exact_distinct_brand"
+                elif distinct_tokens and len(distinct_tokens) >= 1:
+                    cand_tokens = [t for t in _tokens(display_name) if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS]
+                    if cand_tokens == distinct_tokens and len("".join(cand_tokens)) >= 4:
+                        match_type = "brand_with_corporate_modifier"
+
+                if match_type:
+                    # Specificity guard for secondary queries
+                    if q_idx > 0 and match_type == "exact_distinct_brand":
+                        words = distinct_brand.split()
                         is_specific = (
                             len(words) >= 2
-                            or len(legal_core) >= 6
+                            or len(distinct_brand) >= 5
                             or any(ch in company_name.lower() for ch in ("æ", "ø", "å"))
                         )
                         if not is_specific:
                             continue
 
                     company_id = str(item["id"])
-                    # Generate clean canonical company slug / search URL
                     slug = re.sub(r"[^a-z0-9\-]+", "-", display_name.lower()).strip("-")
                     canonical_url = f"https://www.linkedin.com/company/{slug}" if slug else f"https://www.linkedin.com/company/{company_id}"
 
@@ -171,7 +187,7 @@ def discover_linkedin_company(company_name: str, org_number: str, timeout: float
                         "display_name": display_name,
                         "profile_url": canonical_url,
                         "exact_entity": True,
-                        "match_type": "exact_legal_core",
+                        "match_type": match_type,
                         "source": "linkedin_guest_api",
                         "security_assessment": sec,
                     }
@@ -352,118 +368,193 @@ def discover_linkedin_jobs(company_name: str, org_number: str, timeout: float = 
     if not company_name or not _JOBS_CIRCUIT.is_available():
         return []
     try:
-        clean = urllib.parse.quote(company_name.strip())
-        url = f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={clean}&location=Norway"
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept-Language": "en-US,en;q=0.9,no;q=0.8",
-            },
-        )
-        deadline = time.monotonic() + timeout
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = _read_bounded_with_deadline(resp, 200_000, deadline)
-        _JOBS_CIRCUIT.record_success()
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(raw, "html.parser")
-        jobs = []
         comp_core = _normalize_name(company_name)
+        distinct_toks = [t for t in _tokens(company_name) if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS]
+        distinct_brand = " ".join(distinct_toks)
+
+        search_terms = []
+        if comp_core:
+            search_terms.append(comp_core)
+        if company_name.strip() and company_name.strip() not in search_terms:
+            search_terms.append(company_name.strip())
+        if distinct_brand and len(distinct_brand) >= 4 and distinct_brand not in search_terms:
+            search_terms.append(distinct_brand)
+
+        jobs = []
         now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        for card in soup.select("div.base-search-card")[:3]:
-            title_node = card.select_one("h3.base-search-card__title, span.sr-only")
-            company_node = card.select_one("h4.base-search-card__subtitle")
-            loc_node = card.select_one("span.job-search-card__location")
-            link_node = card.select_one("a.base-card__full-link")
-            comp_name = company_node.get_text(" ", strip=True) if company_node else ""
-            c_core = _normalize_name(comp_name)
-            j_url = link_node.get("href") if link_node else ""
-            if comp_core and c_core and (comp_core in c_core or c_core in comp_core) and j_url:
-                jobs.append({
-                    "id": "li-job-" + hashlib.sha256(f"{org_number}|{j_url}".encode()).hexdigest()[:20],
-                    "organisation_number": str(org_number),
-                    "platform": "linkedin",
-                    "signal_type": "job_posting",
-                    "title": title_node.get_text(" ", strip=True) if title_node else "Open Position",
-                    "company": comp_name,
-                    "location": loc_node.get_text(" ", strip=True) if loc_node else "Norway",
-                    "job_url": j_url,
-                    "source_url": j_url,
-                    "url": j_url,
-                    "exact_entity": True,
-                    "retrieved_at": now_iso,
-                })
+
+        for s_term in search_terms:
+            if jobs:
+                break
+            clean = urllib.parse.quote(s_term)
+            url = f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={clean}&location=Norway"
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept-Language": "en-US,en;q=0.9,no;q=0.8",
+                },
+            )
+            deadline = time.monotonic() + timeout
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = _read_bounded_with_deadline(resp, 200_000, deadline)
+            _JOBS_CIRCUIT.record_success()
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(raw, "html.parser")
+            for card in soup.select("div.base-search-card")[:3]:
+                title_node = card.select_one("h3.base-search-card__title, span.sr-only")
+                company_node = card.select_one("h4.base-search-card__subtitle")
+                loc_node = card.select_one("span.job-search-card__location")
+                link_node = card.select_one("a.base-card__full-link")
+                comp_name = company_node.get_text(" ", strip=True) if company_node else ""
+                c_core = _normalize_name(comp_name)
+                j_url = link_node.get("href") if link_node else ""
+
+                comp_a = company_node.find("a") if company_node else None
+                comp_url = comp_a.get("href") if comp_a else None
+
+                name_matches = False
+                if comp_core and c_core and (comp_core in c_core or c_core in comp_core):
+                    name_matches = True
+                elif distinct_brand and len(distinct_brand) >= 4 and c_core:
+                    cand_non_mod = " ".join([t for t in _tokens(comp_name) if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS])
+                    if cand_non_mod == distinct_brand:
+                        name_matches = True
+
+                if name_matches and j_url:
+                    job_entry = {
+                        "id": "li-job-" + hashlib.sha256(f"{org_number}|{j_url}".encode()).hexdigest()[:20],
+                        "organisation_number": str(org_number),
+                        "platform": "linkedin",
+                        "signal_type": "job_posting",
+                        "title": title_node.get_text(" ", strip=True) if title_node else "Open Position",
+                        "company": comp_name,
+                        "location": loc_node.get_text(" ", strip=True) if loc_node else "Norway",
+                        "job_url": j_url,
+                        "source_url": j_url,
+                        "url": j_url,
+                        "exact_entity": True,
+                        "retrieved_at": now_iso,
+                    }
+                    if comp_url:
+                        job_entry["company_profile_url"] = comp_url
+                    jobs.append(job_entry)
         return jobs
     except Exception:
         _JOBS_CIRCUIT.record_failure()
         return []
 
 
-def discover_nav_jobs(company_name: str, org_number: str, timeout: float = 3.0) -> list[dict[str, Any]]:
-    """Discover verified Norwegian national job postings from official NAV Arbeidsplassen public search."""
+def discover_nav_jobs(company_name: str, org_number: str, timeout: float = 3.5) -> list[dict[str, Any]]:
+    """Discover verified Norwegian national job postings from official NAV Arbeidsplassen public search API.
+
+    Queries the official NAV search API (arbeidsplassen.nav.no/stillinger/api/search).
+    Enforces exact entity matching against employer name, businessName, or orgnr.
+    """
     if not company_name:
         return []
     clean_name = re.sub(r"\b(AS|ASA|ENK|ANS|DA|NUF|BA|SA|HF|IKS|KF|BRL|HOLDING|EIENDOM)\b", "", company_name, flags=re.I).strip()
     if not clean_name:
         clean_name = company_name.strip()
-    try:
-        url = f"https://arbeidsplassen.nav.no/stillinger?q={urllib.parse.quote(clean_name)}&v=6"
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml",
-            },
-        )
-        deadline = time.monotonic() + timeout
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = _read_bounded_with_deadline(resp, 350_000, deadline)
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(raw.decode("utf-8", errors="replace"), "html.parser")
-        articles = soup.find_all("article", attrs={"aria-label": True})
-        if not articles:
-            return []
 
-        comp_core = _normalize_name(company_name)
-        jobs = []
-        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    org_str = str(org_number).strip()
+    comp_core = _normalize_name(company_name)
+    distinct_toks = [t for t in _tokens(company_name) if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS]
+    distinct_brand = " ".join(distinct_toks)
 
-        for art in articles:
-            label = art.get("aria-label") or ""
-            parts = [p.strip() for p in label.split(",")]
-            title = parts[0] if parts else "Ledig stilling"
-            employer = parts[1] if len(parts) > 1 else ""
-            location = parts[2] if len(parts) > 2 else "Norge"
-            emp_core = _normalize_name(employer)
-            # Require matching employer core
-            if not (comp_core and emp_core and (comp_core in emp_core or emp_core in comp_core)):
-                continue
+    queries = []
+    if org_str and len(org_str) == 9:
+        queries.append(org_str)
+    if clean_name:
+        queries.append(clean_name)
+    if company_name.strip() not in queries:
+        queries.append(company_name.strip())
+    if distinct_brand and len(distinct_brand) >= 4 and distinct_brand not in queries:
+        queries.append(distinct_brand)
 
-            link_elem = art.find("a", href=True)
-            if not link_elem or "/stillinger/stilling/" not in link_elem["href"]:
-                continue
-            path = link_elem["href"]
-            j_url = f"https://arbeidsplassen.nav.no{path}" if path.startswith("/") else path
-            uuid = path.split("/")[-1]
+    jobs: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-            jobs.append({
-                "id": "nav-job-" + hashlib.sha256(f"{org_number}|{uuid}".encode()).hexdigest()[:20],
-                "organisation_number": str(org_number),
-                "platform": "job_board",
-                "signal_type": "job_posting",
-                "title": title,
-                "company": employer,
-                "location": location,
-                "job_url": j_url,
-                "source_url": j_url,
-                "url": j_url,
-                "exact_entity": True,
-                "source": "nav_arbeidsplassen",
-                "retrieved_at": now_iso,
-            })
-            if len(jobs) >= 3:
-                break
-        return jobs
-    except Exception:
-        return []
+    for q in queries:
+        if len(jobs) >= 5:
+            break
+        try:
+            url = f"https://arbeidsplassen.nav.no/stillinger/api/search?q={urllib.parse.quote(q)}&size=10"
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json",
+                },
+            )
+            deadline = time.monotonic() + timeout
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = _read_bounded_with_deadline(resp, 350_000, deadline)
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+            hits = (data.get("hits") or {}).get("hits") or []
+            for hit in hits:
+                src = hit.get("_source") or {}
+                uuid = src.get("uuid")
+                if not uuid or uuid in seen_ids:
+                    continue
+
+                b_name = str(src.get("businessName") or "")
+                emp_obj = src.get("employer") or {}
+                emp_name = str((emp_obj.get("name") if isinstance(emp_obj, dict) else "") or b_name or src.get("properties", {}).get("employer") or "")
+                hit_org = str(src.get("properties", {}).get("orgnr") or src.get("orgnr") or (emp_obj.get("orgnr") if isinstance(emp_obj, dict) else "") or "").strip()
+
+                org_match = bool(org_str and hit_org and org_str == hit_org)
+                emp_core = _normalize_name(emp_name)
+                b_core = _normalize_name(b_name)
+
+                name_match = False
+                if comp_core and len(comp_core) >= 4 and not all(t in GENERIC_INDUSTRY_WORDS for t in comp_core.split()):
+                    if comp_core == emp_core or comp_core == b_core:
+                        name_match = True
+                    elif comp_core in emp_core or emp_core in comp_core or comp_core in b_core or b_core in comp_core:
+                        name_match = True
+                    else:
+                        c_toks = set(comp_core.split())
+                        e_toks = set(emp_core.split()) | set(b_core.split())
+                        if c_toks and c_toks.issubset(e_toks):
+                            name_match = True
+                if not name_match and distinct_brand and len(distinct_brand) >= 4:
+                    if distinct_brand in emp_core or distinct_brand in b_core:
+                        name_match = True
+
+                if not (org_match or name_match):
+                    continue
+
+                seen_ids.add(uuid)
+                title = str(src.get("title") or "Ledig stilling")
+                location_list = src.get("locationList") or []
+                loc_str = "Norge"
+                if location_list and isinstance(location_list[0], dict):
+                    loc_item = location_list[0]
+                    loc_str = str(loc_item.get("city") or loc_item.get("municipal") or loc_item.get("county") or "Norge")
+
+                j_url = f"https://arbeidsplassen.nav.no/stillinger/stilling/{uuid}"
+                jobs.append({
+                    "id": "nav-job-" + hashlib.sha256(f"{org_str}|{uuid}".encode()).hexdigest()[:20],
+                    "organisation_number": org_str,
+                    "platform": "job_board",
+                    "signal_type": "job_posting",
+                    "title": title,
+                    "company": emp_name or b_name or company_name,
+                    "location": loc_str,
+                    "job_url": j_url,
+                    "source_url": j_url,
+                    "url": j_url,
+                    "exact_entity": True,
+                    "source": "nav_arbeidsplassen",
+                    "date_posted": src.get("published"),
+                    "retrieved_at": now_iso,
+                })
+                if len(jobs) >= 5:
+                    break
+        except Exception:
+            continue
+    return jobs
+
 

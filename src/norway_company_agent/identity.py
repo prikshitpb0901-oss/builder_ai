@@ -206,6 +206,9 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     elif core_compact and len(core_compact) >= 6 and (core_compact in hostname_compact or hostname_compact.startswith(core_compact)):
         score = 0.95
         reasons.append("normalized legal name core directly matches domain hostname")
+    elif distinct_compact and len(distinct_compact) >= 4 and distinct_compact in hostname_compact and distinct_compact in normalized_candidate_text:
+        score = 0.95
+        reasons.append("distinctive brand name token directly matches domain hostname and page content")
     elif core_compact and len(core_compact) >= 5 and (core_compact in req_host_compact or req_host_compact.startswith(core_compact)) and not is_discovered and not detected_parked:
         score = 0.95
         reasons.append("registry-linked domain registered by entity matches corporate core")
@@ -279,9 +282,22 @@ def assess_social_identity(profile: dict[str, Any], link: dict[str, str]) -> dic
     # First-party declared link on an exact-verified company website is trusted authority
     is_verified_site_link = bool(web_assessment.get("publishable"))
 
+    core_distinct = [t for t in core if t not in CORPORATE_MODIFIERS]
+    core_non_generic = [t for t in core_distinct if t not in GENERIC_INDUSTRY_WORDS]
+    distinct_compact = "".join(core_distinct)
+
     if core_compact and core_compact in handle_compact:
         score = 0.98
         reason = "normalized legal-name sequence appears in the social handle"
+    elif len(core_distinct) >= 2 and len(distinct_compact) >= 4 and distinct_compact in handle_compact and core_non_generic:
+        score = 0.95
+        reason = "distinctive company brand sequence appears in the social handle"
+    elif len(core_distinct) == 1 and core_distinct[0] in core_non_generic and (len(core_distinct[0]) >= 5 or any(ch in core_distinct[0] for ch in ("æ", "ø", "å"))) and core_distinct[0] in handle_compact:
+        score = 0.95
+        reason = "single distinctive brand token appears in the social handle"
+    elif len(core_distinct) >= 2 and all(t in handle_compact for t in core_distinct) and core_non_generic:
+        score = 0.95
+        reason = "all distinctive brand tokens appear in the social handle"
     elif dom_compact and len(dom_compact) >= 3 and (dom_compact in handle_compact or any(t in handle_compact for t in dom_tokens if len(t) >= 3)):
         score = 0.95
         reason = "social handle matches verified company website domain"
