@@ -2127,18 +2127,30 @@ class EvaluatorQualificationContractTests(unittest.TestCase):
 
     def test_brreg_kunngjoringer_event_structure_and_contract(self):
         from scripts.run_competition_batch import _fetch_brreg_kunngjoringer
-        # Mocking or testing structure on real entity
-        events = _fetch_brreg_kunngjoringer({"organisation_number": "923609016", "name": "EQUINOR ASA"}, limit=2)
-        self.assertTrue(len(events) >= 1)
-        ev = events[0]
-        self.assertEqual(ev["organisation_number"], "923609016")
-        self.assertEqual(ev["platform"], "brreg_kunngjoringer")
-        self.assertEqual(ev["signal_type"], "statutory_announcement")
-        self.assertEqual(ev["publisher"], "Brønnøysundregistrene")
-        self.assertEqual(ev["credibility_score"], 1.0)
-        self.assertEqual(ev["credibility_tier"], "official")
-        self.assertTrue(ev["exact_entity"])
-        self.assertTrue(ev["published_at"].endswith("Z"))
+        from unittest.mock import patch, MagicMock
+        html_sample = (
+            "<html><body><table>"
+            "<tr><td>04.09.2026</td><td>Styre</td></tr>"
+            "<tr><td>18.08.2026</td><td>Godkjent årsregnskap med bærekraftsrapportering</td></tr>"
+            "</table></body></html>"
+        )
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = html_sample.encode("iso-8859-1")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.__exit__.return_value = None
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            events = _fetch_brreg_kunngjoringer({"organisation_number": "923609016", "name": "EQUINOR ASA"}, limit=2)
+            self.assertTrue(len(events) >= 1)
+            ev = events[0]
+            self.assertEqual(ev["organisation_number"], "923609016")
+            self.assertEqual(ev["platform"], "brreg_kunngjoringer")
+            self.assertEqual(ev["signal_type"], "statutory_announcement")
+            self.assertEqual(ev["publisher"], "Brønnøysundregistrene")
+            self.assertEqual(ev["credibility_score"], 1.0)
+            self.assertEqual(ev["credibility_tier"], "official")
+            self.assertTrue(ev["exact_entity"])
+            self.assertTrue(ev["published_at"].endswith("Z"))
 
     def test_corporate_group_and_leadership_synthesis(self):
         from norway_company_agent.research import synthesize_company_profile

@@ -166,7 +166,7 @@ def _fetch_brreg_kunngjoringer(profile: dict[str, Any], limit: int = 3) -> list[
     req = urllib.request.Request(u, data=data, headers={"User-Agent": NEWS_UA})
     events = []
     try:
-        with urllib.request.urlopen(req, timeout=3.0, context=ctx) as resp:
+        with urllib.request.urlopen(req, timeout=6.0, context=ctx) as resp:
             html = resp.read().decode("iso-8859-1", errors="replace")
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, "html.parser")

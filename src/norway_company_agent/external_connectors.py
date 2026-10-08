@@ -204,13 +204,20 @@ def discover_youtube_channel(
     try:
         import yt_dlp
 
+        class _SilentYtdlLogger:
+            def debug(self, msg: str) -> None: pass
+            def warning(self, msg: str) -> None: pass
+            def error(self, msg: str) -> None: pass
+
         options = {
             "quiet": True,
             "no_warnings": True,
+            "nocheckcertificate": True,
             "extract_flat": True,
             "playlistend": max_results,
             "skip_download": True,
             "socket_timeout": 8,
+            "logger": _SilentYtdlLogger(),
         }
 
         clean_name = re.sub(r"\b(AS|ASA|ENK|ANS|DA|NUF|BA|SA|HF|IKS|KF|BRL|HOLDING|EIENDOM)\b", "", company_name, flags=re.I).strip() or company_name
