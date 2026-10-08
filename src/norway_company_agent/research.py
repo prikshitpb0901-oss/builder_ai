@@ -262,6 +262,7 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     municipality = profile.get("municipality") or "Norway"
     industry = profile.get("industry_label") or profile.get("industry_code") or "commercial operations"
     employees = profile.get("employees")
+    supported_growth_items: list[str] = []
 
     # 1. What the company does
     what_it_does = f"{name} ({org}) is a registered Norwegian {legal_form} operating in {industry}, based in {municipality}."
@@ -271,11 +272,23 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     if employees is not None:
         what_it_does += f" It employs {employees} registered staff."
 
+    # Corporate group structure synthesis
+    grp_val = (evidence.get("group", {}) or {}).get("value") or {}
+    if isinstance(grp_val, dict) and grp_val.get("organisasjonsnummer"):
+        root_org = str(grp_val.get("organisasjonsnummer") or "")
+        root_name = grp_val.get("navn") or "Parent Group"
+        children = grp_val.get("children") or []
+        if org == root_org and children:
+            what_it_does += f" Ultimate parent entity of a corporate group controlling {len(children)} registered subsidiaries."
+            supported_growth_items.append(f"Ultimate parent controlling {len(children)} corporate group subsidiaries per Brreg")
+        elif org != root_org and root_name:
+            what_it_does += f" Operating subsidiary in the {root_name} corporate group (parent: {root_name}, org nr {root_org})."
+            supported_growth_items.append(f"Operating subsidiary in {root_name} registered corporate group")
+
     # 2. Financial and operational status
     fin_val = (evidence.get("financials", {}) or {}).get("value") or {}
     raw_records = fin_val.get("records") or []
     records = []
-    supported_growth_items = []
     if raw_records:
         records = sorted(raw_records, key=_record_end_date)
         latest = records[-1]
@@ -324,7 +337,17 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     # 3. Leadership & roles
     roles_val = (evidence.get("roles", {}) or {}).get("value") or {}
     active_roles = [r for r in roles_val.get("roles", []) if not r.get("inactive")]
-    leadership_status = f"{len(active_roles)} active registered role holder(s) on file in Brreg." if active_roles else "No active public board roles returned in Brreg. Unlisted leadership is not inferred."
+    if active_roles:
+        daglig_leder = next((r.get("name") for r in active_roles if r.get("role_code") == "DAGL" or str(r.get("role") or "").lower() == "daglig leder"), None)
+        styreleder = next((r.get("name") for r in active_roles if r.get("role_code") == "LEDE" or "styreleder" in str(r.get("role") or "").lower()), None)
+        leadership_parts = [f"{len(active_roles)} active registered role holder(s) on file in Brreg."]
+        if daglig_leder:
+            leadership_parts.append(f"Daglig leder: {daglig_leder}.")
+        if styreleder:
+            leadership_parts.append(f"Styreleder: {styreleder}.")
+        leadership_status = " ".join(leadership_parts)
+    else:
+        leadership_status = "No active public board roles returned in Brreg. Unlisted leadership is not inferred."
 
     # 4. What remains unknown (explicit transparency as required by rubric)
     unknowns = []
@@ -355,8 +378,15 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     # 6. Media coverage from news mentions
     news = profile.get("news_mentions") or profile.get("dated_news") or []
     if news:
-        publishers = list({item.get("publisher", "unknown") for item in news})[:5]
-        media_coverage = f"{len(news)} verified news article(s) found from: {', '.join(publishers)}."
+        statutory = [item for item in news if item.get("platform") == "brreg_kunngjoringer"]
+        editorial = [item for item in news if item.get("platform") != "brreg_kunngjoringer"]
+        parts = []
+        if editorial:
+            ed_pubs = list({item.get("publisher", "unknown") for item in editorial})[:3]
+            parts.append(f"{len(editorial)} verified media/press article(s) found from: {', '.join(ed_pubs)}")
+        if statutory:
+            parts.append(f"{len(statutory)} statutory announcement(s) on file in Brønnøysundregistrene official gazette")
+        media_coverage = ". ".join(parts) + "."
     else:
         media_coverage = "No verified news coverage discovered in monitored editorial media or company press releases."
 

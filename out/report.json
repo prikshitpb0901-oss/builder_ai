@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20261007144002",
-  "started_at": "2026-10-07T14:40:02.859143Z",
-  "completed_at": "2026-10-07T14:42:29.011218Z",
+  "run_id": "run-20261008035714",
+  "started_at": "2026-10-08T03:57:14.574727Z",
+  "completed_at": "2026-10-08T04:02:58.917204Z",
   "expected_count": 100,
   "emitted_envelopes": 100,
   "resumed_profiles": 0,
@@ -23,15 +23,15 @@
     "selected": 100
   },
   "operations": {
-    "requests": 1324,
-    "bytes": 9399278,
-    "p50_ms": 1045,
-    "p95_ms": 1122
+    "requests": 1112,
+    "bytes": 975737,
+    "p50_ms": 1198,
+    "p95_ms": 5653
   },
   "refresh": {
-    "prior_profiles_provided": false,
-    "changes_detected": 0,
-    "profiles_with_changes": 0
+    "prior_profiles_provided": true,
+    "changes_detected": 49,
+    "profiles_with_changes": 20
   },
   "validation": {
     "passed": true,

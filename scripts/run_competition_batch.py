@@ -155,6 +155,58 @@ def _fetch_google_news(profile: dict, limit: int = 5) -> list[dict]:
         return []
 
 
+def _fetch_brreg_kunngjoringer(profile: dict[str, Any], limit: int = 3) -> list[dict[str, Any]]:
+    org = re.sub(r"\D", "", str(profile.get("organisation_number") or ""))
+    if not org or len(org) != 9:
+        return []
+    import ssl
+    ctx = ssl._create_unverified_context()
+    u = "https://w2.brreg.no/kunngjoring/hent.jsp"
+    data = urllib.parse.urlencode({"orgnr": org}).encode("utf-8")
+    req = urllib.request.Request(u, data=data, headers={"User-Agent": NEWS_UA})
+    events = []
+    try:
+        with urllib.request.urlopen(req, timeout=3.0, context=ctx) as resp:
+            html = resp.read().decode("iso-8859-1", errors="replace")
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        for tr in soup.find_all("tr"):
+            r = [s.strip() for s in tr.stripped_strings]
+            if len(r) >= 2 and re.match(r"^\d{2}\.\d{2}\.\d{4}$", r[0]):
+                date_raw = r[0]
+                event_name = " / ".join(r[1:])
+                try:
+                    dt = datetime.strptime(date_raw, "%d.%m.%Y").replace(tzinfo=timezone.utc)
+                    iso_dt = dt.isoformat().replace("+00:00", "Z")
+                    source_url = f"https://w2.brreg.no/kunngjoring/hent.jsp?orgnr={org}"
+                    h_id = "brreg-" + hashlib.sha256(f"{org}|{iso_dt}|{event_name}".encode()).hexdigest()[:24]
+                    events.append({
+                        "id": h_id,
+                        "organisation_number": org,
+                        "platform": "brreg_kunngjoringer",
+                        "signal_type": "statutory_announcement",
+                        "source_url": source_url,
+                        "url": source_url,
+                        "retrieved_at": utc_now(),
+                        "published_at": iso_dt,
+                        "exact_entity": True,
+                        "text": f"Brønnøysundregistrene kunngjøring: {event_name} ({profile.get('name')})",
+                        "title": f"Offisiell kunngjøring: {event_name}",
+                        "publisher": "Brønnøysundregistrene",
+                        "publisher_domain": "brreg.no",
+                        "credibility_score": 1.0,
+                        "credibility_tier": "official",
+                        "credibility_reasons": ["official_state_statutory_gazette"],
+                    })
+                except Exception:
+                    continue
+                if len(events) >= limit:
+                    break
+    except Exception:
+        pass
+    return events
+
+
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -239,7 +291,7 @@ def main() -> None:
 
     def enrich(profile: dict) -> tuple[dict, dict]:
         started_mono = time.monotonic()
-        enrich_deadline = started_mono + 25.0
+        enrich_deadline = started_mono + 35.0
         try:
             records, metrics = fetch_official_modules(profile["organisation_number"], fetch_modules)
             profile["evidence"].update(records)
@@ -320,28 +372,29 @@ def main() -> None:
                     if raw_name_toks:
                         clean_all = "".join(raw_name_toks)
                         if len(clean_all) >= 3:
-                            cand_domains.extend([f"www.{clean_all}.no", f"{clean_all}.no"])
-                            from norway_company_agent.identity import GENERIC_INDUSTRY_WORDS
-                            if len(clean_all) >= 5 and clean_all not in GENERIC_INDUSTRY_WORDS:
-                                cand_domains.extend([f"www.{clean_all}.com", f"{clean_all}.com"])
+                            cand_domains.append(f"{clean_all}.no")
                         if len(raw_name_toks) > 1:
                             clean_hyphen = "-".join(raw_name_toks)
-                            cand_domains.extend([f"www.{clean_hyphen}.no", f"{clean_hyphen}.no"])
+                            cand_domains.append(f"{clean_hyphen}.no")
                             c2_all = "".join(raw_name_toks[:2])
                             c2_hyphen = "-".join(raw_name_toks[:2])
                             if len(c2_all) >= 4:
-                                cand_domains.extend([f"www.{c2_all}.no", f"{c2_all}.no", f"www.{c2_hyphen}.no", f"{c2_hyphen}.no"])
-                            acronym = "".join(t[0] for t in raw_name_toks)
-                            if len(acronym) >= 3:
-                                cand_domains.extend([f"www.{acronym}.no", f"{acronym}.no"])
+                                cand_domains.extend([f"{c2_all}.no", f"{c2_hyphen}.no"])
+                        from norway_company_agent.identity import GENERIC_INDUSTRY_WORDS
+                        if len(clean_all) >= 5 and clean_all not in GENERIC_INDUSTRY_WORDS:
+                            cand_domains.append(f"{clean_all}.com")
+                        acronym = "".join(t[0] for t in raw_name_toks)
+                        if len(acronym) >= 3:
+                            cand_domains.append(f"{acronym}.no")
 
                     seen_cands = set()
                     cand_domains = [c for c in cand_domains if not (c in seen_cands or seen_cands.add(c))]
 
-                    for d_cand in cand_domains:
-                        if time.monotonic() > enrich_deadline:
+                    cand_deadline = time.monotonic() + 5.0
+                    for d_cand in cand_domains[:5]:
+                        if time.monotonic() > cand_deadline or time.monotonic() > enrich_deadline:
                             break
-                        c_rec, c_met = fetch_website(d_cand, timeout=2.5, source_class="discovered_company_website")
+                        c_rec, c_met = fetch_website(d_cand, timeout=1.5, source_class="discovered_company_website")
                         if c_rec.get("status") == "available":
                             temp_p = {**profile, "evidence": {**profile.get("evidence", {}), "website": c_rec}}
                             gated = apply_website_identity_gate(temp_p, c_rec)
@@ -388,6 +441,15 @@ def main() -> None:
                             "credibility_tier": "high",
                             "credibility_reasons": ["first_party_company_news"],
                         })
+
+            # Incorporate official Brønnøysundregistrene Kunngjøringer (Official State Gazette events)
+            try:
+                brreg_events = _fetch_brreg_kunngjoringer(profile, limit=3)
+                for bev in brreg_events:
+                    if not any(m.get("id") == bev.get("id") or m.get("text") == bev.get("text") for m in news_mentions):
+                        news_mentions.append(bev)
+            except Exception:
+                pass
 
             site_url = website_val.get("final_url") or profile.get("website") or ""
 

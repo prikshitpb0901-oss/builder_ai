@@ -31,6 +31,8 @@ def _read(value: Any, path: tuple[str, ...]) -> Any:
 def _evidence_for(profile: dict[str, Any], field: str) -> dict[str, Any]:
     module = field.split(".", 1)[0]
     records = profile.get("evidence", {})
+    if field == "registry.website":
+        return records.get("website") or records.get("registry_live") or records.get("registry", {})
     if module == "registry":
         return records.get("registry_live") or records.get("registry", {})
     return records.get(module, {})
@@ -49,6 +51,11 @@ def diff_profile(previous: dict[str, Any], current: dict[str, Any]) -> list[dict
             continue
         record = _evidence_for(current, field)
         previous_record = _evidence_for(previous, field)
+        # Suppress false changes caused by transient source errors, network drops, or unobserved evidence
+        if record.get("status") in {"source_error", "network_error", "timeout", "blocked"}:
+            continue
+        if previous_record.get("status") in {"source_error", "network_error", "timeout", "blocked"}:
+            continue
         changes.append({
             "organisation_number": new_org,
             "field": field,

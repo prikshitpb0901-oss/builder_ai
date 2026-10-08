@@ -400,42 +400,44 @@ def discover_nav_jobs(company_name: str, org_number: str, timeout: float = 3.0) 
     if not clean_name:
         clean_name = company_name.strip()
     try:
-        url = f"https://arbeidsplassen.nav.no/stillinger/api/search?q={urllib.parse.quote(clean_name)}&size=5"
+        url = f"https://arbeidsplassen.nav.no/stillinger?q={urllib.parse.quote(clean_name)}&v=6"
         req = urllib.request.Request(
             url,
             headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml",
             },
         )
         deadline = time.monotonic() + timeout
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = _read_bounded_with_deadline(resp, 300_000, deadline)
-        data = json.loads(raw.decode("utf-8", errors="replace"))
-        hits = data.get("hits", {}).get("hits", [])
-        if not hits:
+            raw = _read_bounded_with_deadline(resp, 350_000, deadline)
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw.decode("utf-8", errors="replace"), "html.parser")
+        articles = soup.find_all("article", attrs={"aria-label": True})
+        if not articles:
             return []
 
         comp_core = _normalize_name(company_name)
         jobs = []
         now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-        for hit in hits:
-            src = hit.get("_source", {})
-            uuid = src.get("uuid")
-            if not uuid:
-                continue
-            employer = src.get("businessName") or src.get("employer") or ""
+        for art in articles:
+            label = art.get("aria-label") or ""
+            parts = [p.strip() for p in label.split(",")]
+            title = parts[0] if parts else "Ledig stilling"
+            employer = parts[1] if len(parts) > 1 else ""
+            location = parts[2] if len(parts) > 2 else "Norge"
             emp_core = _normalize_name(employer)
             # Require matching employer core
             if not (comp_core and emp_core and (comp_core in emp_core or emp_core in comp_core)):
                 continue
 
-            j_url = f"https://arbeidsplassen.nav.no/stillinger/stilling/{uuid}"
-            title = src.get("title") or "Ledig stilling"
-            loc_list = src.get("locations") or []
-            location = loc_list[0].get("city") if loc_list and isinstance(loc_list[0], dict) else "Norge"
-            pub_date = src.get("published")
+            link_elem = art.find("a", href=True)
+            if not link_elem or "/stillinger/stilling/" not in link_elem["href"]:
+                continue
+            path = link_elem["href"]
+            j_url = f"https://arbeidsplassen.nav.no{path}" if path.startswith("/") else path
+            uuid = path.split("/")[-1]
 
             jobs.append({
                 "id": "nav-job-" + hashlib.sha256(f"{org_number}|{uuid}".encode()).hexdigest()[:20],
@@ -448,8 +450,6 @@ def discover_nav_jobs(company_name: str, org_number: str, timeout: float = 3.0) 
                 "job_url": j_url,
                 "source_url": j_url,
                 "url": j_url,
-                "date_posted": pub_date,
-                "published_at": pub_date,
                 "exact_entity": True,
                 "source": "nav_arbeidsplassen",
                 "retrieved_at": now_iso,

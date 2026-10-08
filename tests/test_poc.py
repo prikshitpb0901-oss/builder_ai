@@ -1712,6 +1712,40 @@ class EvaluatorQualificationContractTests(unittest.TestCase):
         self.assertIn("what_changed", summary)
         self.assertIn("detected change(s) since prior run", summary["what_changed"])
 
+    def test_differential_refresh_identical_profiles_produce_zero_changes(self):
+        """Ensure diff_profile produces 0 false changes when comparing identical profiles."""
+        profile = {
+            "organisation_number": "912345678",
+            "name": "Equinor ASA",
+            "employees": 100,
+            "website": "www.equinor.com",
+            "evidence": {
+                "registry": evidence("registry", "available", "official", "https://example.test", content_sha256="a" * 64),
+                "website": evidence("website", "available", "company_site", "https://www.equinor.com", content_sha256="w" * 64),
+            },
+        }
+        changes = diff_profile(profile, profile)
+        self.assertEqual(len(changes), 0)
+
+    def test_differential_refresh_transient_source_error_suppressed(self):
+        """Ensure diff_profile suppresses false alarms when new snapshot has transient source_error."""
+        old_profile = {
+            "organisation_number": "912345678",
+            "name": "Equinor ASA",
+            "evidence": {
+                "roles": evidence("roles", "available", "official", "https://example.test", value={"roles": [{"name": "Anders"}]}, content_sha256="r" * 64),
+            },
+        }
+        new_profile = {
+            "organisation_number": "912345678",
+            "name": "Equinor ASA",
+            "evidence": {
+                "roles": evidence("roles", "source_error", "official", "https://example.test", note="socket error"),
+            },
+        }
+        changes = diff_profile(old_profile, new_profile)
+        self.assertEqual(len(changes), 0)
+
     def test_single_token_entity_verification_in_news_headline(self):
         from norway_company_agent.news_credibility import verify_entity_in_headline
         # Single-token major entities (Equinor, Elopak, Telenor, Sunnaas)
@@ -2090,6 +2124,68 @@ class EvaluatorQualificationContractTests(unittest.TestCase):
         }
         res_foreign = assess_website_identity(prof_foreign)
         self.assertFalse(res_foreign["publishable"])
+
+    def test_brreg_kunngjoringer_event_structure_and_contract(self):
+        from scripts.run_competition_batch import _fetch_brreg_kunngjoringer
+        # Mocking or testing structure on real entity
+        events = _fetch_brreg_kunngjoringer({"organisation_number": "923609016", "name": "EQUINOR ASA"}, limit=2)
+        self.assertTrue(len(events) >= 1)
+        ev = events[0]
+        self.assertEqual(ev["organisation_number"], "923609016")
+        self.assertEqual(ev["platform"], "brreg_kunngjoringer")
+        self.assertEqual(ev["signal_type"], "statutory_announcement")
+        self.assertEqual(ev["publisher"], "Brønnøysundregistrene")
+        self.assertEqual(ev["credibility_score"], 1.0)
+        self.assertEqual(ev["credibility_tier"], "official")
+        self.assertTrue(ev["exact_entity"])
+        self.assertTrue(ev["published_at"].endswith("Z"))
+
+    def test_corporate_group_and_leadership_synthesis(self):
+        from norway_company_agent.research import synthesize_company_profile
+        profile = {
+            "name": "TEST HOLDING ASA",
+            "organisation_number": "999888777",
+            "legal_form": "ASA",
+            "evidence": {
+                "group": {
+                    "status": "available",
+                    "value": {
+                        "organisasjonsnummer": "999888777",
+                        "navn": "TEST HOLDING ASA",
+                        "children": [{"navn": "SUB ONE AS"}, {"navn": "SUB TWO AS"}],
+                    },
+                },
+                "roles": {
+                    "status": "available",
+                    "value": {
+                        "roles": [
+                            {"role_code": "DAGL", "role": "Daglig leder", "name": "Kari Nordmann"},
+                            {"role_code": "LEDE", "role": "Styreleder", "name": "Ola Nordmann"},
+                        ],
+                    },
+                },
+            },
+        }
+        res = synthesize_company_profile(profile)
+        self.assertIn("controlling 2 registered subsidiaries", res["what_the_company_does"])
+        self.assertIn("Daglig leder: Kari Nordmann", res["leadership_status"])
+        self.assertIn("Styreleder: Ola Nordmann", res["leadership_status"])
+        self.assertTrue(any("subsidiaries" in s for s in res["growth_signals"]["supported_signals"]))
+
+    def test_media_coverage_separates_statutory_from_editorial(self):
+        from norway_company_agent.research import synthesize_company_profile
+        profile = {
+            "name": "TEST NORGE AS",
+            "organisation_number": "999888777",
+            "news_mentions": [
+                {"platform": "news", "publisher": "Dagens Næringsliv", "title": "Artikkel 1"},
+                {"platform": "brreg_kunngjoringer", "publisher": "Brønnøysundregistrene", "title": "Styre"},
+            ],
+            "evidence": {},
+        }
+        res = synthesize_company_profile(profile)
+        self.assertIn("1 verified media/press article(s) found from: Dagens Næringsliv", res["media_coverage"])
+        self.assertIn("1 statutory announcement(s) on file in Brønnøysundregistrene official gazette", res["media_coverage"])
 
 
 if __name__ == "__main__":
