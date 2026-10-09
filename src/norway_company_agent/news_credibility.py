@@ -177,8 +177,9 @@ def verify_entity_in_headline(company_name: str, title: str) -> dict[str, bool |
             if all(t in title_tokens for t in base_tokens):
                 return {"matched": True, "mode": "multi_token_base_name"}
         elif n_base == 1 and (len(base_tokens[0]) >= 4 or any(ch in base_tokens[0] for ch in ("æ", "ø", "å"))):
-            if base_tokens[0] in title_tokens:
-                return {"matched": True, "mode": "single_token_distinct_name"}
+            if base_tokens[0] not in GENERIC_INDUSTRY_WORDS and base_tokens[0] not in CORPORATE_MODIFIERS:
+                if base_tokens[0] in title_tokens:
+                    return {"matched": True, "mode": "single_token_distinct_name"}
 
     # Distinct tokens stripping corporate modifiers (e.g. 'Wyssen' for 'Wyssen Norge AS')
     distinct_tokens = [t for t in base_tokens if t not in CORPORATE_MODIFIERS]

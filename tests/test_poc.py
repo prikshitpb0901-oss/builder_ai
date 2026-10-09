@@ -1761,6 +1761,15 @@ class EvaluatorQualificationContractTests(unittest.TestCase):
         self.assertTrue(res_sun["matched"])
         self.assertEqual(res_sun["mode"], "multi_token_base_name")
 
+        # Single generic tokens fail closed
+        res_sea = verify_entity_in_headline("SEAFOOD AS", "Norsk seafood opplever vekst - E24")
+        self.assertFalse(res_sea["matched"])
+        self.assertEqual(res_sea["mode"], "none")
+
+        res_cap = verify_entity_in_headline("CAPITAL AS", "Nordic Capital vurderer oppkjøp - DN")
+        self.assertFalse(res_cap["matched"])
+        self.assertEqual(res_cap["mode"], "none")
+
     def test_verified_website_social_identity_gate_accepts_first_party_links(self):
         from norway_company_agent.identity import assess_social_identity
         profile = {

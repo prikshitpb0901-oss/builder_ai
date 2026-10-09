@@ -5,3 +5,6 @@ __pycache__/
 *.tmp
 scratch/
 out_latest_100/
+.agents/
+PROJECT.md
+*.zip
