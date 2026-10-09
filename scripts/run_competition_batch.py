@@ -52,6 +52,19 @@ NEWS_UA = "SignalpostResearchPOC/1.0 (https://builderr.ai; bounded qualification
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
 
+NORWEGIAN_CONNECTORS = {"i", "og", "for", "av", "paa", "pa", "til", "ved"}
+NORWEGIAN_GEO_TERMS = {
+    "steinkjer", "oslo", "bergen", "trondheim", "stavanger", "tromso", "tromsoe",
+    "tromsø", "sandnes", "fredrikstad", "sarpsborg", "skien", "alesund", "aalesund", "ålesund",
+    "tonsberg", "toensberg", "tønsberg", "haugesund", "moss", "sandefjord", "bodo", "bodoe",
+    "bodø", "arendal", "hamar", "larvik", "halden", "steinkjer", "harstad", "molde", "kongsberg",
+    "horten", "gjovik", "gjoevik", "gjøvik", "lillehammer", "asker", "baerum", "bærum", "lillestrom",
+    "lillestrøm", "innlandet", "rogaland", "vestland", "more", "møre", "romsdal", "nordland",
+    "troms", "finnmark", "agder", "vestfold", "telemark", "ostfold", "østfold", "buskerud",
+    "akershus", "norge", "norway", "vest", "nord", "sor", "sør", "ost", "øst",
+}
+
+
 def generate_domain_candidates(name: str) -> list[str]:
     """Generate high-probability domain candidates for a Norwegian company."""
     if not name:
@@ -81,14 +94,37 @@ def generate_domain_candidates(name: str) -> list[str]:
             clean_distinct = "".join(distinct_tokens)
             if len(clean_distinct) >= 3:
                 candidates.append(f"{clean_distinct}.no")
+                candidates.append(f"{clean_distinct}as.no")
             if len(distinct_tokens) > 1:
                 candidates.append(f"{'-'.join(distinct_tokens)}.no")
-                if len(distinct_tokens) == 2 and len(distinct_tokens[1]) >= 4 and distinct_tokens[1] not in GENERIC_INDUSTRY_WORDS:
+
+                # Candidate omitting Norwegian prepositions/connectors (e.g. "musikk i innlandet" -> "musikkinnlandet.no")
+                no_connectors = [t for t in distinct_tokens if t not in NORWEGIAN_CONNECTORS]
+                if no_connectors and no_connectors != distinct_tokens:
+                    candidates.append(f"{''.join(no_connectors)}.no")
+                    candidates.append(f"{'-'.join(no_connectors)}.no")
+
+                # Candidate omitting geographic suffixes (e.g. "sabrura steinkjer" -> "sabrura.no")
+                no_geo = [t for t in distinct_tokens if t not in NORWEGIAN_GEO_TERMS]
+                if no_geo and no_geo != distinct_tokens:
+                    candidates.append(f"{''.join(no_geo)}.no")
+                    candidates.append(f"{'-'.join(no_geo)}.no")
+
+                # First distinct coined token if >= 4 chars and not generic (e.g. "skya.no", "insbo.no", "takstforum.no", "teamtec.no", "gangstad.no")
+                first_tok = distinct_tokens[0]
+                if len(first_tok) >= 4 and first_tok not in GENERIC_INDUSTRY_WORDS and first_tok not in NORWEGIAN_GEO_TERMS:
+                    candidates.append(f"{first_tok}.no")
+                    candidates.append(f"{first_tok}.com")
+                    candidates.append(f"{first_tok}as.no")
+
+                if len(distinct_tokens) == 2 and len(distinct_tokens[1]) >= 4 and distinct_tokens[1] not in GENERIC_INDUSTRY_WORDS and distinct_tokens[1] not in NORWEGIAN_GEO_TERMS:
                     candidates.append(f"{distinct_tokens[1]}.no")
+
             if len(clean_distinct) >= 4 and clean_distinct not in GENERIC_INDUSTRY_WORDS:
                 candidates.append(f"{clean_distinct}.com")
             if len(distinct_tokens) == 1 and len(distinct_tokens[0]) >= 3:
                 candidates.append(f"{distinct_tokens[0]}.no")
+                candidates.append(f"{distinct_tokens[0]}as.no")
                 if len(distinct_tokens[0]) >= 4 and distinct_tokens[0] not in GENERIC_INDUSTRY_WORDS:
                     candidates.append(f"{distinct_tokens[0]}.com")
 
@@ -99,6 +135,9 @@ def generate_domain_candidates(name: str) -> list[str]:
                 candidates.append(f"{clean_stem}.no")
             if len(stem_tokens) > 1:
                 candidates.append(f"{'-'.join(stem_tokens)}.no")
+                no_connectors_stem = [t for t in stem_tokens if t not in NORWEGIAN_CONNECTORS]
+                if no_connectors_stem and no_connectors_stem != stem_tokens:
+                    candidates.append(f"{''.join(no_connectors_stem)}.no")
             if len(clean_stem) >= 5 and clean_stem not in GENERIC_INDUSTRY_WORDS:
                 candidates.append(f"{clean_stem}.com")
 
@@ -130,25 +169,16 @@ def _can_resolve_domain(domain: str, timeout: float = 0.8) -> bool:
         clean_host = urllib.parse.urlparse(clean_host).hostname or clean_host
     clean_host = clean_host.split("/")[0].split(":")[0]
     try:
-        socket.setdefaulttimeout(timeout)
-        socket.getaddrinfo(clean_host, 443, proto=socket.IPPROTO_TCP)
+        socket.getaddrinfo(clean_host, 80)
         return True
     except Exception:
-        try:
-            socket.getaddrinfo(clean_host, 80, proto=socket.IPPROTO_TCP)
-            return True
-        except Exception:
-            if not clean_host.startswith("www."):
-                try:
-                    socket.getaddrinfo(f"www.{clean_host}", 443, proto=socket.IPPROTO_TCP)
-                    return True
-                except Exception:
-                    try:
-                        socket.getaddrinfo(f"www.{clean_host}", 80, proto=socket.IPPROTO_TCP)
-                        return True
-                    except Exception:
-                        return False
-            return False
+        if not clean_host.startswith("www."):
+            try:
+                socket.getaddrinfo(f"www.{clean_host}", 80)
+                return True
+            except Exception:
+                return False
+        return False
 
 
 
@@ -502,7 +532,7 @@ def main() -> None:
                         if cand not in cand_domains:
                             cand_domains.append(cand)
 
-                    cand_deadline = time.monotonic() + 8.0
+                    cand_deadline = time.monotonic() + 12.0
                     for d_cand in cand_domains:
                         if time.monotonic() > cand_deadline or time.monotonic() > enrich_deadline:
                             break
@@ -664,9 +694,15 @@ def main() -> None:
                     profile["customer_reviews"] = reviews_match
 
             # Hiring / Job Postings: NAV Arbeidsplassen + Structured JSON-LD + Career Links
+            site_brand = ""
+            if site_url:
+                host_raw = (urllib.parse.urlparse(site_url).hostname or "").removeprefix("www.").split(".")[0]
+                if host_raw and len(host_raw) >= 3 and host_raw not in GENERIC_INDUSTRY_WORDS and host_raw not in CORPORATE_MODIFIERS:
+                    site_brand = host_raw
+
             jobs_list = []
             if time.monotonic() < enrich_deadline:
-                nav_jobs = discover_nav_jobs(profile.get("name") or "", profile["organisation_number"])
+                nav_jobs = discover_nav_jobs(profile.get("name") or "", profile["organisation_number"], timeout=6.5, brand=site_brand)
                 if nav_jobs:
                     jobs_list.extend(nav_jobs)
 
@@ -972,6 +1008,12 @@ def main() -> None:
     ]
     validation = validate_envelopes(envelopes, expected_count)
     write_jsonl(profiles_output, ordered_profiles)
+    if profiles_output.name.endswith(".jsonl"):
+        json_path = profiles_output.with_suffix(".json")
+        json_path.write_text(json.dumps(ordered_profiles, ensure_ascii=False, indent=2), encoding="utf-8")
+    elif profiles_output.name.endswith(".json"):
+        jsonl_path = profiles_output.with_suffix(".jsonl")
+        write_jsonl(jsonl_path, ordered_profiles)
     write_jsonl(Path(args.output), envelopes)
     latencies = sorted(operations.pop("latencies_ms", []))
     operations["p50_ms"] = latencies[len(latencies) // 2] if latencies else None

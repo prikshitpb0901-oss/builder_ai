@@ -716,72 +716,73 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
         bytes_received = len(raw)
         page_latencies = [elapsed]
         homepage_domain = value["registered_domain"]
-        for page_url in _priority_links(final_url, soup):
-            page, page_social, page_hiring, page_news, page_requests, page_bytes, page_elapsed, page_error = _fetch_secondary_page(
-                page_url,
-                homepage_domain=homepage_domain,
-                timeout=timeout,
-                max_bytes=min(max_bytes, 1_000_000),
-            )
-            requests += page_requests
-            bytes_received += page_bytes
-            if page_elapsed:
-                page_latencies.append(page_elapsed)
-            if page:
-                pages.append(page)
-                social.extend(page_social)
-                for j in page.get("job_postings") or []:
-                    if not any(existing.get("url") == j.get("url") for existing in all_jobs):
-                        all_jobs.append(j)
-                for h in page_hiring:
-                    if h not in all_hiring:
-                        all_hiring.append(h)
-                for n in page_news:
-                    if not any(existing["url"] == n["url"] for existing in all_news):
-                        all_news.append(n)
-            elif page_error:
-                crawl_errors.append({"url": page_url, "error": page_error})
+        if source_class != "discovered_company_website":
+            for page_url in _priority_links(final_url, soup):
+                page, page_social, page_hiring, page_news, page_requests, page_bytes, page_elapsed, page_error = _fetch_secondary_page(
+                    page_url,
+                    homepage_domain=homepage_domain,
+                    timeout=timeout,
+                    max_bytes=min(max_bytes, 1_000_000),
+                )
+                requests += page_requests
+                bytes_received += page_bytes
+                if page_elapsed:
+                    page_latencies.append(page_elapsed)
+                if page:
+                    pages.append(page)
+                    social.extend(page_social)
+                    for j in page.get("job_postings") or []:
+                        if not any(existing.get("url") == j.get("url") for existing in all_jobs):
+                            all_jobs.append(j)
+                    for h in page_hiring:
+                        if h not in all_hiring:
+                            all_hiring.append(h)
+                    for n in page_news:
+                        if not any(existing["url"] == n["url"] for existing in all_news):
+                            all_news.append(n)
+                elif page_error:
+                    crawl_errors.append({"url": page_url, "error": page_error})
 
-        # Proactive probing if careers or news not yet discovered in nav
-        if not all_hiring:
-            for c_path in ("/careers", "/karriere", "/ledige-stillinger", "/jobb"):
-                probe_url = urllib.parse.urljoin(final_url, c_path)
-                try:
-                    probe_page, probe_social, probe_hiring, probe_news, p_req, p_bytes, p_elap, p_err = _fetch_secondary_page(
-                        probe_url, homepage_domain=homepage_domain, timeout=2.5, max_bytes=500_000
-                    )
-                    requests += p_req
-                    bytes_received += p_bytes
-                    if probe_page:
-                        pages.append(probe_page)
-                        all_hiring.append(probe_url)
-                        for h in probe_hiring:
-                            if h not in all_hiring:
-                                all_hiring.append(h)
-                        break
-                except Exception:
-                    pass
+            # Proactive probing if careers or news not yet discovered in nav
+            if not all_hiring:
+                for c_path in ("/careers", "/karriere", "/ledige-stillinger", "/jobb"):
+                    probe_url = urllib.parse.urljoin(final_url, c_path)
+                    try:
+                        probe_page, probe_social, probe_hiring, probe_news, p_req, p_bytes, p_elap, p_err = _fetch_secondary_page(
+                            probe_url, homepage_domain=homepage_domain, timeout=2.5, max_bytes=500_000
+                        )
+                        requests += p_req
+                        bytes_received += p_bytes
+                        if probe_page:
+                            pages.append(probe_page)
+                            all_hiring.append(probe_url)
+                            for h in probe_hiring:
+                                if h not in all_hiring:
+                                    all_hiring.append(h)
+                            break
+                    except Exception:
+                        pass
 
-        if not all_news:
-            for n_path in ("/nyheter", "/news", "/aktuelt", "/presse"):
-                probe_url = urllib.parse.urljoin(final_url, n_path)
-                try:
-                    probe_page, probe_social, probe_hiring, probe_news, p_req, p_bytes, p_elap, p_err = _fetch_secondary_page(
-                        probe_url, homepage_domain=homepage_domain, timeout=2.5, max_bytes=500_000
-                    )
-                    requests += p_req
-                    bytes_received += p_bytes
-                    if probe_page:
-                        pages.append(probe_page)
-                        for n in probe_news:
-                            if not any(existing["url"] == n["url"] for existing in all_news):
-                                all_news.append(n)
-                        break
-                except Exception:
-                    pass
+            if not all_news:
+                for n_path in ("/nyheter", "/news", "/aktuelt", "/presse"):
+                    probe_url = urllib.parse.urljoin(final_url, n_path)
+                    try:
+                        probe_page, probe_social, probe_hiring, probe_news, p_req, p_bytes, p_elap, p_err = _fetch_secondary_page(
+                            probe_url, homepage_domain=homepage_domain, timeout=2.5, max_bytes=500_000
+                        )
+                        requests += p_req
+                        bytes_received += p_bytes
+                        if probe_page:
+                            pages.append(probe_page)
+                            for n in probe_news:
+                                if not any(existing["url"] == n["url"] for existing in all_news):
+                                    all_news.append(n)
+                            break
+                    except Exception:
+                        pass
 
         # Proactive sitemap.xml fallback if dated news or career links not yet found
-        if not any(n.get("published_at") for n in all_news) or not all_hiring:
+        if source_class != "discovered_company_website" and (not any(n.get("published_at") for n in all_news) or not all_hiring):
             sitemap_url = urllib.parse.urljoin(final_url, "/sitemap.xml")
             try:
                 sitemap_req = urllib.request.Request(sitemap_url, headers={"User-Agent": USER_AGENT})

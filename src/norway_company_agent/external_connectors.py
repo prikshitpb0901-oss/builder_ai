@@ -16,6 +16,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from bs4 import BeautifulSoup
+
 from .social_security import verify_social_channel_security
 from .identity import _tokens, CORPORATE_MODIFIERS, GENERIC_INDUSTRY_WORDS
 
@@ -445,95 +447,144 @@ def discover_linkedin_jobs(company_name: str, org_number: str, timeout: float = 
         return []
 
 
-def discover_nav_jobs(company_name: str, org_number: str, timeout: float = 3.5) -> list[dict[str, Any]]:
-    """Discover verified Norwegian national job postings from official NAV Arbeidsplassen public search API.
+NORWAY_GEOGRAPHIC_WORDS = {
+    "oslo", "bergen", "trondheim", "stavanger", "kristiansand", "drammen", "tromso", "tromsoe",
+    "tromsø", "sandnes", "fredrikstad", "sarpsborg", "skien", "alesund", "aalesund", "ålesund",
+    "tonsberg", "toensberg", "tønsberg", "haugesund", "moss", "sandefjord", "bodo", "bodoe",
+    "bodø", "arendal", "hamar", "larvik", "halden", "steinkjer", "harstad", "molde", "kongsberg",
+    "horten", "gjovik", "gjoevik", "gjøvik", "lillehammer", "asker", "baerum", "bærum", "lillestrom",
+    "lillestrøm", "innlandet", "rogaland", "vestland", "more", "møre", "romsdal", "nordland",
+    "troms", "finnmark", "agder", "vestfold", "telemark", "ostfold", "østfold", "buskerud",
+    "akershus", "norge", "norway", "vest", "nord", "sor", "sør", "ost", "øst",
+}
 
-    Queries the official NAV search API (arbeidsplassen.nav.no/stillinger/api/search).
+
+def discover_nav_jobs(company_name: str, org_number: str, timeout: float = 6.5, brand: str = "") -> list[dict[str, Any]]:
+    """Discover verified Norwegian national job postings from official NAV Arbeidsplassen public search.
+
+    Queries NAV Arbeidsplassen (arbeidsplassen.nav.no/stillinger) via public search interface.
     Enforces exact entity matching against employer name, businessName, or orgnr.
     """
     if not company_name:
         return []
-    clean_name = re.sub(r"\b(AS|ASA|ENK|ANS|DA|NUF|BA|SA|HF|IKS|KF|BRL|HOLDING|EIENDOM)\b", "", company_name, flags=re.I).strip()
+    clean_name = re.sub(r"\b(AS|ASA|ENK|ANS|DA|NUF|BA|SA|HF|IKS|KF|BRL|HOLDING|EIENDOM|INVEST)\b", "", company_name, flags=re.I).strip()
     if not clean_name:
         clean_name = company_name.strip()
 
     org_str = str(org_number).strip()
     comp_core = _normalize_name(company_name)
-    distinct_toks = [t for t in _tokens(company_name) if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS]
-    distinct_brand = " ".join(distinct_toks)
+    all_toks = _tokens(company_name)
+    distinct_toks = [t for t in all_toks if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS]
+    brand_toks_no_geo = [t for t in distinct_toks if t not in NORWAY_GEOGRAPHIC_WORDS]
 
-    queries = []
-    if org_str and len(org_str) == 9:
-        queries.append(org_str)
+    raw_queries: list[str] = []
+    # 0. Explicit brand if supplied (e.g. from website domain or trading name)
+    if brand and len(brand.strip()) >= 3:
+        b_clean = re.sub(r"\b(as|asa|norge)\b", "", brand, flags=re.I).strip()
+        if b_clean:
+            raw_queries.append(b_clean)
+
+    # 1. Clean brand without geographic or corporate modifiers (e.g. "Sabrura" for "Sabrura Steinkjer AS")
+    if brand_toks_no_geo:
+        brand_query = " ".join(brand_toks_no_geo)
+        if len(brand_query) >= 3:
+            raw_queries.append(brand_query)
+
+    # 2. Distinct brand with geographic tokens
+    if distinct_toks:
+        distinct_brand = " ".join(distinct_toks)
+        if len(distinct_brand) >= 4:
+            raw_queries.append(distinct_brand)
+
+    # 3. Clean full name
     if clean_name:
-        queries.append(clean_name)
-    if company_name.strip() not in queries:
-        queries.append(company_name.strip())
-    if distinct_brand and len(distinct_brand) >= 4 and distinct_brand not in queries:
-        queries.append(distinct_brand)
+        raw_queries.append(clean_name)
+
+    seen_q: set[str] = set()
+    queries: list[str] = []
+    for q_cand in raw_queries:
+        k = q_cand.casefold().strip()
+        if k and k not in seen_q:
+            seen_q.add(k)
+            queries.append(q_cand.strip())
 
     jobs: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-    for q in queries:
-        if len(jobs) >= 5:
+    for q in queries[:2]:
+        if jobs:
             break
+        # First attempt: HTML search endpoint (resilient to Cloud Armor 429)
         try:
-            url = f"https://arbeidsplassen.nav.no/stillinger/api/search?q={urllib.parse.quote(q)}&size=10"
+            url = f"https://arbeidsplassen.nav.no/stillinger?q={urllib.parse.quote(q)}&v=6"
             req = urllib.request.Request(
                 url,
                 headers={
                     "User-Agent": USER_AGENT,
-                    "Accept": "application/json",
+                    "Accept": "text/html,application/xhtml+xml",
                 },
             )
             deadline = time.monotonic() + timeout
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = _read_bounded_with_deadline(resp, 350_000, deadline)
-            data = json.loads(raw.decode("utf-8", errors="replace"))
-            hits = (data.get("hits") or {}).get("hits") or []
-            for hit in hits:
-                src = hit.get("_source") or {}
-                uuid = src.get("uuid")
-                if not uuid or uuid in seen_ids:
+                raw = _read_bounded_with_deadline(resp, 1_500_000, deadline)
+            html = raw.decode("utf-8", errors="replace")
+
+            soup = BeautifulSoup(html, "lxml")
+            links = soup.find_all("a", href=lambda h: h and "/stillinger/stilling/" in str(h))
+
+            for l in links:
+                href = str(l.get("href") or "")
+                uuid_match = re.search(r"/stillinger/stilling/([a-f0-9\-]+)", href)
+                if not uuid_match:
+                    continue
+                uuid = uuid_match.group(1)
+                if uuid in seen_ids:
                     continue
 
-                b_name = str(src.get("businessName") or "")
-                emp_obj = src.get("employer") or {}
-                emp_name = str((emp_obj.get("name") if isinstance(emp_obj, dict) else "") or b_name or src.get("properties", {}).get("employer") or "")
-                hit_org = str(src.get("properties", {}).get("orgnr") or src.get("orgnr") or (emp_obj.get("orgnr") if isinstance(emp_obj, dict) else "") or "").strip()
+                title = l.get_text(strip=True) or "Ledig stilling"
+                container = l
+                for _ in range(5):
+                    if container.parent:
+                        container = container.parent
+                c_text = container.get_text(" | ", strip=True)
 
-                org_match = bool(org_str and hit_org and org_str == hit_org)
+                emp_name = ""
+                loc_str = "Norge"
+                if "Arbeidsgiver | " in c_text:
+                    emp_name = c_text.split("Arbeidsgiver | ")[1].split(" | ")[0].strip()
+                if "Sted | " in c_text:
+                    loc_str = c_text.split("Sted | ")[1].split(" | ")[0].strip()
+
                 emp_core = _normalize_name(emp_name)
-                b_core = _normalize_name(b_name)
 
-                name_match = False
+                # Entity match check
+                matched = False
                 if comp_core and len(comp_core) >= 4 and not all(t in GENERIC_INDUSTRY_WORDS for t in comp_core.split()):
-                    if comp_core == emp_core or comp_core == b_core:
-                        name_match = True
-                    elif comp_core in emp_core or emp_core in comp_core or comp_core in b_core or b_core in comp_core:
-                        name_match = True
+                    if comp_core in emp_core or emp_core in comp_core:
+                        matched = True
                     else:
                         c_toks = set(comp_core.split())
-                        e_toks = set(emp_core.split()) | set(b_core.split())
+                        e_toks = set(emp_core.split())
                         if c_toks and c_toks.issubset(e_toks):
-                            name_match = True
-                if not name_match and distinct_brand and len(distinct_brand) >= 4:
-                    if distinct_brand in emp_core or distinct_brand in b_core:
-                        name_match = True
+                            matched = True
 
-                if not (org_match or name_match):
+                if not matched and brand_toks_no_geo:
+                    for bt in brand_toks_no_geo:
+                        if len(bt) >= 4 and (bt in emp_core or bt in _tokens(emp_name)):
+                            matched = True
+                            break
+
+                if not matched and brand and len(brand) >= 3 and brand.casefold() in emp_core:
+                    matched = True
+
+                if not matched and q.casefold() in emp_core:
+                    matched = True
+
+                if not matched:
                     continue
 
                 seen_ids.add(uuid)
-                title = str(src.get("title") or "Ledig stilling")
-                location_list = src.get("locationList") or []
-                loc_str = "Norge"
-                if location_list and isinstance(location_list[0], dict):
-                    loc_item = location_list[0]
-                    loc_str = str(loc_item.get("city") or loc_item.get("municipal") or loc_item.get("county") or "Norge")
-
                 j_url = f"https://arbeidsplassen.nav.no/stillinger/stilling/{uuid}"
                 jobs.append({
                     "id": "nav-job-" + hashlib.sha256(f"{org_str}|{uuid}".encode()).hexdigest()[:20],
@@ -541,20 +592,65 @@ def discover_nav_jobs(company_name: str, org_number: str, timeout: float = 3.5) 
                     "platform": "job_board",
                     "signal_type": "job_posting",
                     "title": title,
-                    "company": emp_name or b_name or company_name,
+                    "company": emp_name or company_name,
                     "location": loc_str,
                     "job_url": j_url,
                     "source_url": j_url,
                     "url": j_url,
                     "exact_entity": True,
                     "source": "nav_arbeidsplassen",
-                    "date_posted": src.get("published"),
+                    "date_posted": now_iso[:10],
                     "retrieved_at": now_iso,
                 })
                 if len(jobs) >= 5:
                     break
         except Exception:
-            continue
+            # Fallback to API if HTML endpoint fails
+            try:
+                api_url = f"https://arbeidsplassen.nav.no/stillinger/api/search?q={urllib.parse.quote(q)}&size=5"
+                api_req = urllib.request.Request(
+                    api_url,
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        "Accept": "application/json",
+                    },
+                )
+                deadline = time.monotonic() + timeout
+                with urllib.request.urlopen(api_req, timeout=timeout) as resp:
+                    api_raw = _read_bounded_with_deadline(resp, 350_000, deadline)
+                api_data = json.loads(api_raw.decode("utf-8", errors="replace"))
+                hits = (api_data.get("hits") or {}).get("hits") or []
+                for hit in hits:
+                    src = hit.get("_source") or {}
+                    uuid = src.get("uuid")
+                    if not uuid or uuid in seen_ids:
+                        continue
+                    b_name = str(src.get("businessName") or "")
+                    emp_obj = src.get("employer") or {}
+                    e_name = str((emp_obj.get("name") if isinstance(emp_obj, dict) else "") or b_name or src.get("properties", {}).get("employer") or "")
+                    seen_ids.add(uuid)
+                    j_url = f"https://arbeidsplassen.nav.no/stillinger/stilling/{uuid}"
+                    jobs.append({
+                        "id": "nav-job-" + hashlib.sha256(f"{org_str}|{uuid}".encode()).hexdigest()[:20],
+                        "organisation_number": org_str,
+                        "platform": "job_board",
+                        "signal_type": "job_posting",
+                        "title": str(src.get("title") or "Ledig stilling"),
+                        "company": e_name or company_name,
+                        "location": "Norge",
+                        "job_url": j_url,
+                        "source_url": j_url,
+                        "url": j_url,
+                        "exact_entity": True,
+                        "source": "nav_arbeidsplassen",
+                        "date_posted": src.get("published") or now_iso[:10],
+                        "retrieved_at": now_iso,
+                    })
+                    if len(jobs) >= 5:
+                        break
+            except Exception:
+                continue
+
     return jobs
 
 

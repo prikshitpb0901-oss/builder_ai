@@ -28,6 +28,16 @@ GENERIC_INDUSTRY_WORDS = {
     "miljo", "sport", "fitness", "trening", "care", "pharma", "lab", "kjemi",
     "vintage", "equity", "fund", "funds", "venture", "ventures", "finance", "global", "international",
 }
+NORWAY_GEOGRAPHIC_WORDS = {
+    "oslo", "bergen", "trondheim", "stavanger", "kristiansand", "drammen", "tromso", "tromsoe",
+    "tromsø", "sandnes", "fredrikstad", "sarpsborg", "skien", "alesund", "aalesund", "ålesund",
+    "tonsberg", "toensberg", "tønsberg", "haugesund", "moss", "sandefjord", "bodo", "bodoe",
+    "bodø", "arendal", "hamar", "larvik", "halden", "steinkjer", "harstad", "molde", "kongsberg",
+    "horten", "gjovik", "gjoevik", "gjøvik", "lillehammer", "asker", "baerum", "bærum", "lillestrom",
+    "lillestrøm", "innlandet", "rogaland", "vestland", "more", "møre", "romsdal", "nordland",
+    "troms", "finnmark", "agder", "vestfold", "telemark", "ostfold", "østfold", "buskerud",
+    "akershus", "norge", "norway", "vest", "nord", "sor", "sør", "ost", "øst",
+}
 
 
 def _tokens(value: Any) -> list[str]:
@@ -178,6 +188,10 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     exact_distinct_in_homepage = bool(core_distinct and any(core_distinct_set.issubset(tokens) for tokens in homepage_token_sets))
     is_business_sports_club = bool(re.search(r"(?:^|\s)B\.?\s*I\.?\s*L\.?(?:\s|$)", str(profile.get("name") or ""), re.I))
 
+    muni_str = (profile.get("business_address_municipality") or profile.get("municipality") or "").casefold().strip()
+    muni_tokens = set(_tokens(muni_str))
+    core_brand = [t for t in core_distinct if t not in muni_tokens and t not in NORWAY_GEOGRAPHIC_WORDS]
+
     # Gate Requirement 2: Strict Scoring
     if detected_fraud:
         score = 0.0
@@ -197,6 +211,9 @@ def assess_website_identity(profile: dict[str, Any]) -> dict[str, Any]:
     elif len(core_distinct) == 1 and core_distinct[0] in core_non_generic and (core_distinct[0] in hostname_tokens or hostname_compact == core_distinct[0] or hostname_compact.startswith(core_distinct[0])) and (core_distinct[0] in title_tokens or exact_homepage_name):
         score = 0.95
         reasons.append("single distinctive legal-name token appears in homepage identity evidence and domain")
+    elif len(core_brand) == 1 and core_brand[0] in core_non_generic and (core_brand[0] in hostname_tokens or hostname_compact == core_brand[0] or hostname_compact.startswith(core_brand[0])) and (core_brand[0] in title_tokens or core_brand[0] in _tokens(candidate_text)):
+        score = 0.95
+        reasons.append("distinctive brand token matches domain and page content while remaining tokens are corporate or geographic modifiers")
     elif core_distinct and len(core_distinct) >= 2 and exact_distinct_in_homepage and (distinct_compact in hostname_compact or hostname_compact in distinct_compact or any(t in hostname_tokens for t in core_distinct)):
         score = 0.95
         reasons.append("distinctive corporate name tokens match homepage and domain evidence")

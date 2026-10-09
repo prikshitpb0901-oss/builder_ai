@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20261008141056",
-  "started_at": "2026-10-08T14:10:56.094736Z",
-  "completed_at": "2026-10-08T14:14:29.145118Z",
+  "run_id": "run-20261009141821",
+  "started_at": "2026-10-09T14:18:21.395261Z",
+  "completed_at": "2026-10-09T14:21:35.761930Z",
   "expected_count": 100,
   "emitted_envelopes": 100,
   "resumed_profiles": 0,
@@ -26,10 +26,10 @@
     "selected": 100
   },
   "operations": {
-    "requests": 1788,
-    "bytes": 22354507,
-    "p50_ms": 1054,
-    "p95_ms": 3006
+    "requests": 1411,
+    "bytes": 16998957,
+    "p50_ms": 1070,
+    "p95_ms": 3021
   },
   "refresh": {
     "prior_profiles_provided": false,
