@@ -3,6 +3,25 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .news_credibility import classify_news_freshness
+
+
+def _categorize_job_discipline(title: str) -> str:
+    lower = str(title or "").casefold()
+    if any(w in lower for w in ("utvikler", "developer", "data", "tech", "engineer", "ingeniør", "it", "software", "arkitekt", "cloud")):
+        return "Engineering & Technology"
+    if any(w in lower for w in ("salg", "sales", "marked", "marketing", "kunde", "account", "advisor", "rådgiver", "selger")):
+        return "Sales & Commercial"
+    if any(w in lower for w in ("leder", "sjef", "manager", "lead", "director", "cfo", "ceo", "coo", "partner")):
+        return "Executive & Management"
+    if any(w in lower for w in ("drift", "operatør", "sjåfør", "mekaniker", "lager", "montør", "elektriker", "rørlegger", "håndverker")):
+        return "Operations & Trades"
+    if any(w in lower for w in ("regnskap", "økonomi", "finance", "controller", "revisor", "admin", "kontor")):
+        return "Finance & Administration"
+    if any(w in lower for w in ("sykepleier", "lege", "helse", "terapeut", "omsorg", "tannlege", "psykolog")):
+        return "Healthcare & Clinical"
+    return "General Operations"
+
 
 def _claim(label: str, value: Any, record: dict[str, Any], classification: str) -> dict[str, Any]:
     return {
@@ -375,17 +394,20 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
                 "content_sha256": mod_rec.get("content_sha256"),
             })
 
-    # 6. Media coverage from news mentions and statutory announcements
+    # 6. Media coverage from news mentions, editorial press, and statutory announcements
     news = profile.get("news_mentions") or profile.get("dated_news") or []
     statutory_events = profile.get("statutory_events") or []
     statutory = list(statutory_events) + [item for item in news if item.get("platform") == "brreg_kunngjoringer" and not any(s.get("id") == item.get("id") for s in statutory_events)]
     editorial = [item for item in news if item.get("platform") != "brreg_kunngjoringer"]
+    freshness = classify_news_freshness(editorial or news)
     parts = []
     if editorial:
         ed_pubs = list({item.get("publisher", "unknown") for item in editorial})[:3]
         parts.append(f"{len(editorial)} verified media/press article(s) found from: {', '.join(ed_pubs)}")
     if statutory:
         parts.append(f"{len(statutory)} statutory announcement(s) on file in Brønnøysundregistrene official gazette")
+    if freshness.get("freshness_tier") != "no_dated_coverage":
+        parts.append(f"Editorial freshness: {freshness['freshness_tier']} (latest {freshness['latest_article_age_days']} days ago)")
     if parts:
         media_coverage = ". ".join(parts) + "."
     else:
@@ -421,20 +443,49 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     else:
         digital_footprint = "No verified external social or corporate media profiles detected. Unobserved profiles are not inferred."
 
+    social_vitality = {
+        "verified_platforms_count": len(seen_platforms),
+        "platforms": sorted(seen_platforms),
+        "vitality": "strong" if len(seen_platforms) >= 3 else ("active" if len(seen_platforms) >= 1 else "unobserved"),
+    }
+
     # 8. Hiring and career opportunities
     hiring_items = []
-    website_hiring = (evidence.get("website", {}).get("value") or {}).get("hiring_links") or []
+    website_val = evidence.get("website", {}).get("value") or {}
+    website_hiring = website_val.get("hiring_links") or []
+    detected_ats = website_val.get("ats_platforms") or []
     if website_hiring:
-        hiring_items.append(f"{len(website_hiring)} career link(s) on verified website")
+        ats_suffix = f" via {', '.join(detected_ats)}" if detected_ats else ""
+        hiring_items.append(f"{len(website_hiring)} career link(s) on verified website{ats_suffix}")
+
     ext_jobs = footprint.get("jobs") or profile.get("jobs") or []
-    if ext_jobs:
-        hiring_items.append(f"{len(ext_jobs)} public vacancy posting(s)")
-        supported_growth_items.append(f"Active hiring recruitment with {len(ext_jobs)} verified vacancy posting(s)")
+    raw_website_jobs = website_val.get("job_postings") or []
+    all_known_jobs = list(ext_jobs)
+    for wj in raw_website_jobs:
+        if not any((j.get("url") or j.get("job_url")) == (wj.get("url") or wj.get("job_url")) for j in all_known_jobs):
+            all_known_jobs.append(wj)
+
+    disciplines = list({_categorize_job_discipline(j.get("title") or "") for j in all_known_jobs if j.get("title")})
+    job_channels = list({str(j.get("source") or j.get("platform") or "job_board") for j in all_known_jobs if j})
+
+    if all_known_jobs:
+        hiring_items.append(f"{len(all_known_jobs)} public vacancy posting(s)")
+        if disciplines:
+            hiring_items.append(f"roles in {', '.join(disciplines[:2])}")
+        supported_growth_items.append(f"Active hiring recruitment with {len(all_known_jobs)} verified vacancy posting(s) across {', '.join(job_channels)}")
 
     if hiring_items:
         hiring_status = f"Verified hiring signals: {', '.join(hiring_items)}."
     else:
-        hiring_status = "No active recruitment postings detected on verified website or NAV Arbeidsplassen. Absence of postings does not prove lack of recruitment."
+        hiring_status = "No active recruitment postings detected on verified website, NAV Arbeidsplassen, or FINN.no. Absence of postings does not prove lack of recruitment."
+
+    hiring_velocity = {
+        "open_vacancies_count": len(all_known_jobs),
+        "recruitment_channels": job_channels,
+        "ats_platforms": detected_ats,
+        "disciplines_hiring": disciplines,
+        "trend": "active_expansion" if len(all_known_jobs) >= 3 else ("steady_recruitment" if all_known_jobs else "no_active_openings"),
+    }
 
     # 9. Supported growth signals separated from inference
     growth_signals = {
@@ -465,8 +516,11 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "growth_signals": growth_signals,
         "what_changed": what_changed,
         "media_coverage": media_coverage,
+        "news_freshness": freshness,
         "digital_footprint": digital_footprint,
+        "social_vitality": social_vitality,
         "hiring_status": hiring_status,
+        "hiring_velocity": hiring_velocity,
         "customer_reviews": reviews_status,
         "what_remains_unknown": unknowns,
         "sources": sources,

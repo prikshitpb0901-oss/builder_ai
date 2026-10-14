@@ -62,6 +62,8 @@ class CircuitBreaker:
 _LI_CIRCUIT = CircuitBreaker(failure_threshold=10, cooldown_seconds=10.0)
 _REVIEWS_CIRCUIT = CircuitBreaker(failure_threshold=10, cooldown_seconds=10.0)
 _JOBS_CIRCUIT = CircuitBreaker(failure_threshold=10, cooldown_seconds=10.0)
+_FINN_CIRCUIT = CircuitBreaker(failure_threshold=10, cooldown_seconds=10.0)
+_FB_CIRCUIT = CircuitBreaker(failure_threshold=10, cooldown_seconds=10.0)
 
 
 
@@ -652,5 +654,264 @@ def discover_nav_jobs(company_name: str, org_number: str, timeout: float = 6.5, 
                 continue
 
     return jobs
+
+
+def discover_finn_jobs(
+    company_name: str,
+    org_number: str,
+    timeout: float = 4.5,
+    brand: str = "",
+) -> list[dict[str, Any]]:
+    """Discover verified Norwegian job postings from FINN.no (Norway's primary job portal).
+
+    Queries https://www.finn.no/job/fulltime/search.html?q=... and parses job cards.
+    Applies exact entity matching against employer name, distinct tokens, or brand.
+    """
+    if not company_name or not _FINN_CIRCUIT.is_available():
+        return []
+
+    org_str = str(org_number).strip()
+    comp_core = _normalize_name(company_name)
+    all_toks = _tokens(company_name)
+    distinct_toks = [t for t in all_toks if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS]
+    brand_toks_no_geo = [t for t in distinct_toks if t not in NORWAY_GEOGRAPHIC_WORDS]
+
+    clean_name = re.sub(r"\b(AS|ASA|ENK|ANS|DA|NUF|BA|SA|HF|IKS|KF|BRL|HOLDING|EIENDOM|INVEST)\b", "", company_name, flags=re.I).strip()
+    if not clean_name:
+        clean_name = company_name.strip()
+
+    queries: list[str] = []
+    if brand and len(brand.strip()) >= 3:
+        b_clean = re.sub(r"\b(as|asa|norge)\b", "", brand, flags=re.I).strip()
+        if b_clean and b_clean not in queries:
+            queries.append(b_clean)
+    if brand_toks_no_geo:
+        bq = " ".join(brand_toks_no_geo)
+        if len(bq) >= 3 and bq not in queries:
+            queries.append(bq)
+    if clean_name and clean_name not in queries:
+        queries.append(clean_name)
+    if comp_core and comp_core not in queries:
+        queries.append(comp_core)
+
+    jobs: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    for q in queries[:2]:
+        if jobs:
+            break
+        try:
+            url = f"https://www.finn.no/job/fulltime/search.html?q={urllib.parse.quote(q)}"
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "text/html,application/xhtml+xml",
+                    "Accept-Language": "nb,no;q=0.9,en-US;q=0.8,en;q=0.7",
+                },
+            )
+            deadline = time.monotonic() + timeout
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = _read_bounded_with_deadline(resp, 1_500_000, deadline)
+            _FINN_CIRCUIT.record_success()
+
+            soup = BeautifulSoup(raw.decode("utf-8", errors="replace"), "html.parser")
+            articles = soup.select("article")
+
+            for art in articles:
+                link_node = art.select_one("a.job-card-link, a[href*='/job/ad/']")
+                if not link_node:
+                    continue
+                href = str(link_node.get("href") or "").strip()
+                if not href or href in seen_urls:
+                    continue
+
+                full_url = urllib.parse.urljoin("https://www.finn.no", href)
+                title = link_node.get_text(strip=True) or "Ledig stilling"
+
+                card_text = art.get_text(" | ", strip=True)
+                parts = [p.strip() for p in card_text.split(" | ") if p.strip()]
+
+                emp_name = company_name
+                location = "Norge"
+
+                # Check if any part matches the employer name
+                for p in parts:
+                    p_core = _normalize_name(p)
+                    if comp_core and (comp_core in p_core or p_core in comp_core):
+                        emp_name = p
+                        break
+                    elif brand_toks_no_geo and all(bt in p_core for bt in brand_toks_no_geo):
+                        emp_name = p
+                        break
+
+                if len(parts) >= 2:
+                    for p in parts[1:]:
+                        if any(geo in p.casefold() for geo in [
+                            "oslo", "bergen", "trondheim", "stavanger", "troms", "drammen",
+                            "viken", "innlandet", "rogaland", "vestland", "agder", "nordland",
+                            "lillehammer", "hamar", "kongsberg", "haugesund"
+                        ]):
+                            location = p
+                            break
+                        elif "dager siden" not in p.casefold() and "plassering" not in p.casefold() and len(p) < 30 and p != emp_name:
+                            location = p
+
+                emp_core = _normalize_name(emp_name)
+
+                # Entity verification:
+                matched = False
+                if comp_core and len(comp_core) >= 4 and not all(t in GENERIC_INDUSTRY_WORDS for t in comp_core.split()):
+                    if comp_core in emp_core or emp_core in comp_core:
+                        matched = True
+                    elif comp_core in card_text.casefold() or _normalize_name(company_name) in _normalize_name(card_text):
+                        matched = True
+                    else:
+                        c_toks = set(comp_core.split())
+                        e_toks = set(emp_core.split())
+                        if c_toks and c_toks.issubset(e_toks):
+                            matched = True
+
+                if not matched and brand_toks_no_geo:
+                    for bt in brand_toks_no_geo:
+                        if len(bt) >= 4 and (bt in emp_core or bt in _tokens(emp_name) or bt in card_text.casefold()):
+                            matched = True
+                            break
+
+                if not matched and brand and len(brand) >= 3:
+                    if brand.casefold() in emp_core or brand.casefold() in card_text.casefold():
+                        matched = True
+
+                if not matched and q.casefold() in emp_core:
+                    matched = True
+
+                if not matched:
+                    continue
+
+                seen_urls.add(href)
+                j_id = "finn-job-" + hashlib.sha256(f"{org_str}|{full_url}".encode()).hexdigest()[:20]
+                jobs.append({
+                    "id": j_id,
+                    "organisation_number": org_str,
+                    "platform": "job_board",
+                    "signal_type": "job_posting",
+                    "title": title[:200],
+                    "company": emp_name or company_name,
+                    "location": location,
+                    "job_url": full_url,
+                    "source_url": full_url,
+                    "url": full_url,
+                    "exact_entity": True,
+                    "source": "finn_no",
+                    "date_posted": now_iso[:10],
+                    "retrieved_at": now_iso,
+                })
+                if len(jobs) >= 5:
+                    break
+        except Exception:
+            _FINN_CIRCUIT.record_failure()
+            continue
+
+    return jobs
+
+
+def discover_facebook_page(
+    company_name: str,
+    org_number: str,
+    website_domain: str | None = None,
+    timeout: float = 3.5,
+) -> dict[str, Any] | None:
+    """Discover verified Facebook company profile via OpenGraph title resolution.
+
+    Derives clean candidate slugs from company brand, legal core, and website domain.
+    Resolves https://www.facebook.com/{slug} and verifies that og:title matches the entity.
+    Applies verify_social_channel_security anti-impersonation gate.
+    """
+    if not company_name or not _FB_CIRCUIT.is_available():
+        return None
+
+    comp_core = _normalize_name(company_name)
+    all_toks = _tokens(company_name)
+    distinct_toks = [t for t in all_toks if t not in CORPORATE_MODIFIERS and t not in GENERIC_INDUSTRY_WORDS]
+    brand_toks_no_geo = [t for t in distinct_toks if t not in NORWAY_GEOGRAPHIC_WORDS]
+
+    candidate_slugs: list[str] = []
+    if website_domain:
+        dom_clean = website_domain.lower().removeprefix("www.").split(".")[0].replace("-", "")
+        if len(dom_clean) >= 3 and dom_clean not in candidate_slugs:
+            candidate_slugs.append(dom_clean)
+
+    if brand_toks_no_geo:
+        slug_brand = "".join(brand_toks_no_geo)
+        if len(slug_brand) >= 3 and slug_brand not in candidate_slugs:
+            candidate_slugs.append(slug_brand)
+
+    if comp_core:
+        slug_core = comp_core.replace(" ", "")
+        if len(slug_core) >= 4 and slug_core not in candidate_slugs:
+            candidate_slugs.append(slug_core)
+
+    for slug in candidate_slugs[:3]:
+        target_url = f"https://www.facebook.com/{slug}"
+        try:
+            req = urllib.request.Request(
+                target_url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "text/html,application/xhtml+xml",
+                    "Accept-Language": "nb,no;q=0.9,en-US;q=0.8,en;q=0.7",
+                },
+            )
+            deadline = time.monotonic() + timeout
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = _read_bounded_with_deadline(resp, 65536, deadline)
+            _FB_CIRCUIT.record_success()
+
+            soup = BeautifulSoup(raw.decode("utf-8", errors="replace"), "html.parser")
+            og_title_tag = soup.find("meta", property="og:title")
+            if not og_title_tag:
+                continue
+            page_title = str(og_title_tag.get("content") or "").strip()
+            if not page_title:
+                continue
+
+            title_core = _normalize_name(page_title)
+            matched = False
+            if comp_core and (comp_core in title_core or title_core in comp_core):
+                matched = True
+            elif brand_toks_no_geo and all(bt in title_core for bt in brand_toks_no_geo):
+                matched = True
+            elif distinct_toks and len("".join(distinct_toks)) >= 4 and all(dt in title_core for dt in distinct_toks):
+                matched = True
+
+            if not matched:
+                continue
+
+            sec = verify_social_channel_security(
+                platform="facebook",
+                channel_or_profile_name=page_title,
+                target_url=target_url,
+                company_name=company_name,
+                website_domain=website_domain,
+            )
+            if not sec.get("is_safe", True):
+                continue
+
+            return {
+                "platform": "facebook",
+                "organisation_number": str(org_number),
+                "display_name": page_title,
+                "profile_url": target_url,
+                "exact_entity": True,
+                "match_type": "exact_legal_core" if comp_core in title_core else "distinct_brand",
+                "source": "facebook_active_discovery",
+                "security_assessment": sec,
+            }
+        except Exception:
+            _FB_CIRCUIT.record_failure()
+            continue
+
+    return None
 
 

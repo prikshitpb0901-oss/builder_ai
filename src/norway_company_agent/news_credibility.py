@@ -356,3 +356,72 @@ def evaluate_news_credibility(
         "reasons": reasons,
         "evaluated_domain": pub_domain,
     }
+
+
+def classify_news_freshness(articles: list[dict[str, Any]], as_of: str | None = None) -> dict[str, Any]:
+    """Evaluate the company's overall news freshness posture and recency window.
+
+    Categorizes into:
+      - 'breaking': latest dated news within last 30 days
+      - 'active': latest dated news within last 90 days
+      - 'current': latest dated news within last 365 days
+      - 'archival': latest dated news > 365 days ago
+      - 'no_dated_coverage': no dated news articles found
+    """
+    dated = [a for a in articles if isinstance(a, dict) and a.get("published_at")]
+    if not dated:
+        return {
+            "freshness_tier": "no_dated_coverage",
+            "latest_article_age_days": None,
+            "coverage_span_days": None,
+            "dated_article_count": 0,
+            "freshest_headline": None,
+        }
+
+    now_dt = datetime.now(timezone.utc)
+    if as_of:
+        try:
+            now_dt = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    dated_with_age = []
+    for a in dated:
+        pub = a.get("published_at")
+        try:
+            dt = datetime.fromisoformat(str(pub).replace("Z", "+00:00"))
+            age = (now_dt - dt).days
+            dated_with_age.append((age, a))
+        except Exception:
+            continue
+
+    if not dated_with_age:
+        return {
+            "freshness_tier": "unparseable_dates",
+            "latest_article_age_days": None,
+            "coverage_span_days": None,
+            "dated_article_count": len(dated),
+            "freshest_headline": None,
+        }
+
+    dated_with_age.sort(key=lambda x: x[0])
+    freshest_age, freshest_item = dated_with_age[0]
+    oldest_age, _ = dated_with_age[-1]
+    span = max(0, oldest_age - freshest_age)
+
+    if freshest_age <= 30:
+        tier = "breaking"
+    elif freshest_age <= 90:
+        tier = "active"
+    elif freshest_age <= 365:
+        tier = "current"
+    else:
+        tier = "archival"
+
+    return {
+        "freshness_tier": tier,
+        "latest_article_age_days": freshest_age,
+        "coverage_span_days": span,
+        "dated_article_count": len(dated_with_age),
+        "freshest_headline": (freshest_item.get("title") or "")[:200],
+    }

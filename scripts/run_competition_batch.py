@@ -45,6 +45,8 @@ from norway_company_agent.external_connectors import (  # noqa: E402
     discover_customer_reviews,
     discover_linkedin_jobs,
     discover_nav_jobs,
+    discover_finn_jobs,
+    discover_facebook_page,
 )
 from norway_company_agent.sentiment import aggregate_company_sentiment  # noqa: E402
 
@@ -686,6 +688,13 @@ def main() -> None:
                 if youtube_match:
                     external_footprint["youtube"] = youtube_match
 
+            # Facebook Page Active Discovery (OpenGraph Entity Resolution)
+            has_website_fb = any(str(s.get("platform") or "").lower() == "facebook" for s in (website_val.get("social_links") or []))
+            if not has_website_fb and time.monotonic() < enrich_deadline:
+                fb_match = discover_facebook_page(profile.get("name") or "", profile["organisation_number"], website_domain)
+                if fb_match:
+                    external_footprint["facebook"] = fb_match
+
             # Customer Reviews (Fagfolkguiden / Google Aggregate)
             if time.monotonic() < enrich_deadline:
                 reviews_match = discover_customer_reviews(profile.get("name") or "", profile["organisation_number"])
@@ -693,7 +702,7 @@ def main() -> None:
                     external_footprint["reviews"] = reviews_match
                     profile["customer_reviews"] = reviews_match
 
-            # Hiring / Job Postings: NAV Arbeidsplassen + Structured JSON-LD + Career Links
+            # Hiring / Job Postings: NAV Arbeidsplassen + FINN.no + LinkedIn + Structured JSON-LD + Career Links
             site_brand = ""
             if site_url:
                 host_raw = (urllib.parse.urlparse(site_url).hostname or "").removeprefix("www.").split(".")[0]
@@ -706,6 +715,12 @@ def main() -> None:
                 if nav_jobs:
                     jobs_list.extend(nav_jobs)
 
+            # FINN.no active vacancy discovery
+            if time.monotonic() < enrich_deadline and len(jobs_list) < 5:
+                finn_jobs = discover_finn_jobs(profile.get("name") or "", profile["organisation_number"], timeout=4.5, brand=site_brand)
+                if finn_jobs:
+                    jobs_list.extend(finn_jobs)
+
             if time.monotonic() < enrich_deadline and len(jobs_list) < 3:
                 li_jobs = discover_linkedin_jobs(profile.get("name") or "", profile["organisation_number"])
                 if li_jobs:
@@ -716,7 +731,7 @@ def main() -> None:
                 for jp in website_val.get("job_postings") or []:
                     jp_url = jp.get("url") or jp.get("source_url")
                     if jp_url and not any(j.get("source_url") == jp_url or j.get("url") == jp_url for j in jobs_list):
-                        jobs_list.append({
+                        site_job_entry = {
                             "id": "site-jp-" + hashlib.sha256(f"{profile['organisation_number']}|{jp_url}".encode()).hexdigest()[:20],
                             "organisation_number": profile["organisation_number"],
                             "platform": "company_site",
@@ -731,7 +746,17 @@ def main() -> None:
                             "source": "verified_website",
                             "date_posted": jp.get("date_posted"),
                             "retrieved_at": utc_now(),
-                        })
+                        }
+                        if jp.get("valid_through"):
+                            site_job_entry["valid_through"] = jp["valid_through"]
+                            site_job_entry["is_expired"] = jp.get("is_expired", False)
+                        if jp.get("employment_type"):
+                            site_job_entry["employment_type"] = jp["employment_type"]
+                        if jp.get("hiring_organization"):
+                            site_job_entry["hiring_organization"] = jp["hiring_organization"]
+                        if jp.get("salary"):
+                            site_job_entry["salary"] = jp["salary"]
+                        jobs_list.append(site_job_entry)
 
                 # Add career links
                 for h_url in (website_val.get("hiring_links") or [])[:3]:
@@ -854,7 +879,7 @@ def main() -> None:
                                 }
                                 break
 
-            for extra_plat in ("linkedin", "youtube"):
+            for extra_plat in ("linkedin", "youtube", "facebook"):
                 if extra_plat in external_footprint and isinstance(external_footprint[extra_plat], dict):
                     extra_url = external_footprint[extra_plat].get("profile_url") or external_footprint[extra_plat].get("channel_url")
                     if extra_url and not any(s.get("url") == extra_url for s in all_social):

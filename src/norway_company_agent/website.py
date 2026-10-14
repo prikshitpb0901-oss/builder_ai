@@ -49,6 +49,25 @@ KNOWN_ATS_DOMAINS = {
     "finn.no", "empirix.no", "homerun.co", "workable.com",
 }
 
+ATS_PLATFORM_NAMES = {
+    "teamtailor.com": "Teamtailor",
+    "webcruiter.no": "Webcruiter",
+    "webcruiter.com": "Webcruiter",
+    "jobbnorge.no": "JobbNorge",
+    "recman.no": "Recman",
+    "recman.io": "Recman",
+    "reachmee.com": "ReachMee",
+    "easycruit.com": "EasyCruit",
+    "workbuster.com": "Workbuster",
+    "greenhouse.io": "Greenhouse",
+    "lever.co": "Lever",
+    "bamboohr.com": "BambooHR",
+    "finn.no": "FINN.no",
+    "empirix.no": "Empirix",
+    "homerun.co": "Homerun",
+    "workable.com": "Workable",
+}
+
 
 
 
@@ -515,6 +534,32 @@ def _extract_job_postings(base_url: str, soup: BeautifulSoup) -> list[dict[str, 
                 if kinds & {"JobPosting"}:
                     title = node.get("title") or node.get("name")
                     date_posted = normalize_iso_datetime(node.get("datePosted"))
+                    valid_through = normalize_iso_datetime(node.get("validThrough"))
+                    emp_type = str(node.get("employmentType") or "").strip() or None
+                    h_org = node.get("hiringOrganization")
+                    hiring_org_name = h_org.get("name") if isinstance(h_org, dict) else (str(h_org).strip() if h_org else None)
+                    sal_val = node.get("baseSalary")
+                    sal_str = None
+                    if isinstance(sal_val, dict):
+                        curr = sal_val.get("currency") or "NOK"
+                        val_num = sal_val.get("value")
+                        if isinstance(val_num, dict):
+                            val_num = val_num.get("value") or val_num.get("minValue")
+                        if val_num is not None:
+                            sal_str = f"{val_num} {curr}"
+                    elif isinstance(sal_val, str) and sal_val.strip():
+                        sal_str = sal_val.strip()
+
+                    is_expired = False
+                    if valid_through:
+                        try:
+                            from datetime import datetime as dt_cls, timezone as tz_cls
+                            vt_dt = dt_cls.fromisoformat(valid_through.replace("Z", "+00:00"))
+                            if vt_dt < dt_cls.now(tz_cls.utc):
+                                is_expired = True
+                        except Exception:
+                            pass
+
                     url = node.get("url") or base_url
                     loc_val = node.get("jobLocation")
                     loc_str = "Norway"
@@ -528,13 +573,23 @@ def _extract_job_postings(base_url: str, soup: BeautifulSoup) -> list[dict[str, 
                         full_url = urllib.parse.urljoin(base_url, str(url))
                         if full_url not in seen:
                             seen.add(full_url)
-                            jobs.append({
+                            job_data = {
                                 "title": str(title)[:200].strip(),
                                 "date_posted": date_posted,
                                 "location": loc_str,
                                 "url": full_url,
                                 "source_url": full_url,
-                            })
+                            }
+                            if valid_through:
+                                job_data["valid_through"] = valid_through
+                                job_data["is_expired"] = is_expired
+                            if emp_type:
+                                job_data["employment_type"] = emp_type
+                            if hiring_org_name:
+                                job_data["hiring_organization"] = hiring_org_name
+                            if sal_str:
+                                job_data["salary"] = sal_str
+                            jobs.append(job_data)
                 for v in node.values():
                     walk_jobs(v)
             elif isinstance(node, list):
@@ -690,6 +745,40 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
                 if full_u not in career_anchors:
                     career_anchors.append(full_u)
         homepage_news = _extract_dated_news_articles(final_url, soup)
+
+        # Proactive RSS / Atom feed auto-discovery from HTML link tags
+        seen_news_urls = {n["url"] for n in homepage_news}
+        for link_node in soup.find_all("link", rel=lambda r: r and "alternate" in str(r).lower()):
+            l_type = str(link_node.get("type") or "").lower()
+            if "rss" in l_type or "atom" in l_type or "xml" in l_type:
+                l_href = str(link_node.get("href") or "").strip()
+                if l_href:
+                    feed_url = urllib.parse.urljoin(final_url, l_href)
+                    try:
+                        f_req = urllib.request.Request(feed_url, headers={"User-Agent": USER_AGENT})
+                        with SAFE_OPENER.open(f_req, timeout=2.5) as f_resp:
+                            f_raw = _read_bounded_with_deadline(f_resp, 200_000, time.monotonic() + 2.5)
+                            f_soup = BeautifulSoup(f_raw.decode("utf-8", errors="replace"), "html.parser")
+                            for ent in f_soup.find_all(["item", "entry"])[:5]:
+                                ent_title = ent.find("title")
+                                t_text = ent_title.get_text(strip=True) if ent_title else ""
+                                ent_link = ent.find("link")
+                                link_url = ""
+                                if ent_link:
+                                    link_url = ent_link.get("href") or ent_link.get_text(strip=True)
+                                full_ent_url = urllib.parse.urljoin(final_url, link_url) if link_url else final_url
+                                date_node = ent.find(["pubdate", "published", "updated", "dc:date"])
+                                iso_pub = normalize_iso_datetime(date_node.get_text(strip=True)) if date_node else None
+                                if t_text and full_ent_url and full_ent_url not in seen_news_urls:
+                                    seen_news_urls.add(full_ent_url)
+                                    homepage_news.append({
+                                        "url": full_ent_url,
+                                        "title": t_text[:200],
+                                        "published_at": iso_pub,
+                                        "schema_type": "RSSFeed",
+                                    })
+                    except Exception:
+                        pass
         value = {
             "requested_url": normalized,
             "final_url": final_url,
@@ -832,6 +921,13 @@ def fetch_website(url: str | None, *, timeout: float = 15.0, max_bytes: int = 2_
         all_news.sort(key=lambda a: (a.get("published_at") is not None, a.get("schema_type") is not None), reverse=True)
         value["pages"] = pages
         value["social_links"] = list({(item["platform"], item["url"]): item for item in social}.values())
+        ats_detected = []
+        for h_url in all_hiring:
+            u_h = (urllib.parse.urlparse(h_url).hostname or "").lower().removeprefix("www.")
+            for ats_d, ats_n in ATS_PLATFORM_NAMES.items():
+                if (u_h == ats_d or u_h.endswith("." + ats_d)) and ats_n not in ats_detected:
+                    ats_detected.append(ats_n)
+        value["ats_platforms"] = ats_detected
         value["hiring_links"] = all_hiring[:8]
         value["job_postings"] = all_jobs[:8]
         value["news_articles"] = all_news[:8]
