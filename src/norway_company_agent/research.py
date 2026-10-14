@@ -285,11 +285,20 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
     # 1. What the company does
     what_it_does = f"{name} ({org}) is a registered Norwegian {legal_form} operating in {industry}, based in {municipality}."
+    reg_val = (evidence.get("registry_live", {}) or {}).get("value") or (evidence.get("registry", {}) or {}).get("value") or {}
+    inc_date = reg_val.get("incorporation_date") or profile.get("incorporation_date")
+    if inc_date:
+        what_it_does += f" Incorporated on {str(inc_date)[:10]}."
+    purpose = reg_val.get("purpose") or profile.get("purpose")
+    if purpose:
+        what_it_does += f" Statutory business purpose: '{str(purpose)[:300]}' per Brønnøysundregistrene."
     website_val = (evidence.get("website", {}) or {}).get("value") or {}
     if website_val.get("description") and (website_val.get("identity_assessment") or {}).get("publishable", True):
         what_it_does += f" Self-reported business activity: {website_val['description'][:300]}."
     if employees is not None:
         what_it_does += f" It employs {employees} registered staff."
+        if employees >= 10:
+            supported_growth_items.append(f"Substantial operating workforce of {employees} registered employees")
 
     # Corporate group structure synthesis
     grp_val = (evidence.get("group", {}) or {}).get("value") or {}
@@ -314,6 +323,10 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
         curr = latest.get("currency") or "NOK"
         rev = latest.get("revenue")
         profit = latest.get("annual_result")
+        op_res = latest.get("operating_result")
+        assets = latest.get("assets")
+        equity = latest.get("equity")
+        debt = latest.get("debt")
         period_raw = latest.get("period")
         if isinstance(period_raw, dict):
             fra = period_raw.get("fraDato", "")
@@ -324,18 +337,37 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
         try:
             rev_num = float(rev) if rev is not None else None
             profit_num = float(profit) if profit is not None else None
+            op_num = float(op_res) if op_res is not None else None
+            assets_num = float(assets) if assets is not None else None
+            equity_num = float(equity) if equity is not None else None
+            debt_num = float(debt) if debt is not None else None
         except (ValueError, TypeError):
-            rev_num, profit_num = None, None
+            rev_num, profit_num, op_num, assets_num, equity_num, debt_num = None, None, None, None, None, None
 
+        fin_parts = []
         if rev_num is not None and profit_num is not None:
-            financial_status = f"Reported {period} financial results: revenue {rev_num:,.0f} {curr} and annual result {profit_num:,.0f} {curr}."
+            fin_parts.append(f"Reported {period} financial results: revenue {rev_num:,.0f} {curr} and annual result {profit_num:,.0f} {curr}.")
             if rev_num > 0:
                 margin = (profit_num / rev_num) * 100.0
-                financial_status += f" Operating profit margin: {margin:.1f}%."
+                fin_parts.append(f"Operating profit margin: {margin:.1f}%.")
+                if margin >= 15.0:
+                    supported_growth_items.append(f"High profitability with {margin:.1f}% net margin")
         elif rev_num is not None:
-            financial_status = f"Reported {period} revenue: {rev_num:,.0f} {curr}."
+            fin_parts.append(f"Reported {period} revenue: {rev_num:,.0f} {curr}.")
         else:
-            financial_status = f"Annual accounts filed for period {period}."
+            fin_parts.append(f"Annual accounts filed for period {period}.")
+
+        # Solvency & balance sheet
+        if assets_num is not None and equity_num is not None and assets_num > 0:
+            eq_ratio = (equity_num / assets_num) * 100.0
+            solv_str = f"Balance sheet: total assets {assets_num:,.0f} {curr}, equity {equity_num:,.0f} {curr} ({eq_ratio:.1f}% equity ratio)"
+            if debt_num is not None:
+                solv_str += f", total liabilities {debt_num:,.0f} {curr}."
+            else:
+                solv_str += "."
+            fin_parts.append(solv_str)
+            if eq_ratio >= 40.0:
+                supported_growth_items.append(f"Robust balance sheet solvency with {eq_ratio:.1f}% equity ratio")
 
         # Multi-year revenue trend if prior account year available
         if len(records) >= 2 and rev_num is not None:
@@ -347,9 +379,11 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
             if prior_rev is not None and prior_rev > 0:
                 growth = ((rev_num - prior_rev) / prior_rev) * 100.0
                 prior_year = str(prior.get("period", {}).get("tilDato", ""))[:4] if isinstance(prior.get("period"), dict) else "prior period"
-                financial_status += f" Multi-year revenue trend: {growth:+.1f}% YoY vs {prior_year}."
+                fin_parts.append(f"Multi-year revenue trend: {growth:+.1f}% YoY vs {prior_year}.")
                 if growth > 0:
                     supported_growth_items.append(f"Revenue grew {growth:+.1f}% YoY ({prior_rev:,.0f} -> {rev_num:,.0f} {curr}) per statutory filing")
+
+        financial_status = " ".join(fin_parts)
     else:
         financial_status = "No annual accounts record available in Regnskapsregisteret for this entity. Financial performance is not inferred."
 
@@ -359,11 +393,14 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
     if active_roles:
         daglig_leder = next((r.get("name") for r in active_roles if r.get("role_code") == "DAGL" or str(r.get("role") or "").lower() == "daglig leder"), None)
         styreleder = next((r.get("name") for r in active_roles if r.get("role_code") == "LEDE" or "styreleder" in str(r.get("role") or "").lower()), None)
+        latest_change = max((str(r.get("last_changed") or "") for r in active_roles if r.get("last_changed")), default="")
         leadership_parts = [f"{len(active_roles)} active registered role holder(s) on file in Brreg."]
         if daglig_leder:
             leadership_parts.append(f"Daglig leder: {daglig_leder}.")
         if styreleder:
             leadership_parts.append(f"Styreleder: {styreleder}.")
+        if latest_change:
+            leadership_parts.append(f"Latest registered governance update: {latest_change[:10]}.")
         leadership_status = " ".join(leadership_parts)
     else:
         leadership_status = "No active public board roles returned in Brreg. Unlisted leadership is not inferred."

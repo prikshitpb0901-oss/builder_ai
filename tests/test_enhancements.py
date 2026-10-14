@@ -171,6 +171,74 @@ class TestEnhancements(unittest.TestCase):
         self.assertEqual(res["hiring_velocity"]["open_vacancies_count"], 2)
         self.assertIn("Engineering & Technology", res["hiring_velocity"]["disciplines_hiring"])
 
+    def test_reject_generic_cms_and_search_social_urls(self):
+        """Strictly test rejection of Wix/CMS templates and search pages as flagged by evaluator."""
+        from norway_company_agent.website import normalize_social_url
+
+        # Facebook CMS templates & search pages
+        self.assertIsNone(normalize_social_url("https://www.facebook.com/wix"))
+        self.assertIsNone(normalize_social_url("https://facebook.com/wixsite"))
+        self.assertIsNone(normalize_social_url("https://www.facebook.com/squarespace"))
+        self.assertIsNone(normalize_social_url("https://www.facebook.com/wordpress"))
+        self.assertIsNone(normalize_social_url("https://www.facebook.com/shopify"))
+        self.assertIsNone(normalize_social_url("https://www.facebook.com/search/top?q=bedrift"))
+        self.assertIsNone(normalize_social_url("https://facebook.com/search/results/"))
+        self.assertIsNone(normalize_social_url("https://www.facebook.com/pages/directory/"))
+        self.assertIsNone(normalize_social_url("https://www.facebook.com/sharer/sharer.php?u=example"))
+
+        # Other platforms CMS templates
+        self.assertIsNone(normalize_social_url("https://www.instagram.com/wix"))
+        self.assertIsNone(normalize_social_url("https://www.instagram.com/squarespace"))
+        self.assertIsNone(normalize_social_url("https://www.linkedin.com/company/wix"))
+        self.assertIsNone(normalize_social_url("https://www.youtube.com/@wix"))
+        self.assertIsNone(normalize_social_url("https://x.com/wix"))
+
+        # Valid company profile should be accepted
+        valid_fb = normalize_social_url("https://www.facebook.com/wyssenavalanche")
+        self.assertIsNotNone(valid_fb)
+        self.assertEqual(valid_fb["platform"], "facebook")
+        self.assertEqual(valid_fb["url"], "https://facebook.com/wyssenavalanche")
+
+    def test_synthesize_statutory_purpose_and_solvency(self):
+        """Test that statutory purpose and balance sheet solvency appear in synthesis."""
+        sample_profile = {
+            "name": "Nordic Tech AS",
+            "organisation_number": "912345678",
+            "legal_form": "AS",
+            "municipality": "Trondheim",
+            "employees": 25,
+            "evidence": {
+                "registry_live": {
+                    "status": "available",
+                    "value": {
+                        "purpose": "Utvikling og salg av sensorteknologi",
+                        "incorporation_date": "2015-06-01",
+                    }
+                },
+                "financials": {
+                    "status": "available",
+                    "value": {
+                        "records": [
+                            {
+                                "period": {"fraDato": "2024-01-01", "tilDato": "2024-12-31"},
+                                "revenue": 10000000,
+                                "annual_result": 2000000,
+                                "assets": 8000000,
+                                "equity": 5000000,
+                                "debt": 3000000,
+                                "currency": "NOK",
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        res = synthesize_company_profile(sample_profile)
+        self.assertIn("sensorteknologi", res["what_the_company_does"])
+        self.assertIn("2015-06-01", res["what_the_company_does"])
+        self.assertIn("62.5% equity ratio", res["financial_status"])
+        self.assertTrue(any("equity ratio" in s for s in res["growth_signals"]["supported_signals"]))
+
 
 if __name__ == "__main__":
     unittest.main()

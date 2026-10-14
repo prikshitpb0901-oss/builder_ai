@@ -837,19 +837,26 @@ def discover_facebook_page(
     brand_toks_no_geo = [t for t in distinct_toks if t not in NORWAY_GEOGRAPHIC_WORDS]
 
     candidate_slugs: list[str] = []
+    blocked_slugs = {
+        "wix", "wixsite", "squarespace", "wordpress", "shopify", "weebly",
+        "webflow", "godaddy", "jimdo", "site123", "duda", "hubspot",
+        "mailchimp", "canva", "search", "pages", "groups", "events",
+        "marketplace", "public", "directory", "help", "login", "home",
+    }
+
     if website_domain:
         dom_clean = website_domain.lower().removeprefix("www.").split(".")[0].replace("-", "")
-        if len(dom_clean) >= 3 and dom_clean not in candidate_slugs:
+        if len(dom_clean) >= 4 and dom_clean not in blocked_slugs and dom_clean not in candidate_slugs:
             candidate_slugs.append(dom_clean)
 
     if brand_toks_no_geo:
         slug_brand = "".join(brand_toks_no_geo)
-        if len(slug_brand) >= 3 and slug_brand not in candidate_slugs:
+        if len(slug_brand) >= 4 and slug_brand not in blocked_slugs and slug_brand not in candidate_slugs:
             candidate_slugs.append(slug_brand)
 
     if comp_core:
         slug_core = comp_core.replace(" ", "")
-        if len(slug_core) >= 4 and slug_core not in candidate_slugs:
+        if len(slug_core) >= 5 and slug_core not in blocked_slugs and slug_core not in candidate_slugs:
             candidate_slugs.append(slug_core)
 
     for slug in candidate_slugs[:3]:
@@ -868,12 +875,26 @@ def discover_facebook_page(
                 raw = _read_bounded_with_deadline(resp, 65536, deadline)
             _FB_CIRCUIT.record_success()
 
-            soup = BeautifulSoup(raw.decode("utf-8", errors="replace"), "html.parser")
+            raw_html = raw.decode("utf-8", errors="replace")
+            raw_lower = raw_html.lower()
+
+            # Reject search/directory or login walls
+            if "search results" in raw_lower or "log into facebook" in raw_lower or "/search" in target_url:
+                continue
+
+            soup = BeautifulSoup(raw_html, "html.parser")
             og_title_tag = soup.find("meta", property="og:title")
             if not og_title_tag:
                 continue
             page_title = str(og_title_tag.get("content") or "").strip()
             if not page_title:
+                continue
+
+            # Reject generic landing page titles
+            p_low = page_title.lower()
+            if p_low in {"facebook", "log in", "log into facebook", "security check", "page not found", "wix", "squarespace", "wordpress"}:
+                continue
+            if any(cms in p_low for cms in ("wix.com", "squarespace", "wordpress", "shopify")):
                 continue
 
             title_core = _normalize_name(page_title)
@@ -887,6 +908,21 @@ def discover_facebook_page(
 
             if not matched:
                 continue
+
+            # Strict company-controlled or company-linked verification
+            domain_linked = False
+            if website_domain:
+                clean_dom = website_domain.lower().removeprefix("www.")
+                if clean_dom in raw_lower:
+                    domain_linked = True
+            org_linked = str(org_number) in raw_lower
+
+            # If not explicitly linked by domain or org number, require full corporate name match
+            if not (domain_linked or org_linked):
+                if not comp_core or len(comp_core) < 5:
+                    continue
+                if comp_core not in title_core and title_core not in comp_core:
+                    continue
 
             sec = verify_social_channel_security(
                 platform="facebook",
@@ -904,6 +940,7 @@ def discover_facebook_page(
                 "display_name": page_title,
                 "profile_url": target_url,
                 "exact_entity": True,
+                "domain_verified": domain_linked,
                 "match_type": "exact_legal_core" if comp_core in title_core else "distinct_brand",
                 "source": "facebook_active_discovery",
                 "security_assessment": sec,

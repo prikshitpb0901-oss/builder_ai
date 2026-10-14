@@ -155,6 +155,12 @@ def normalize_locations(body: Any) -> dict[str, Any]:
 
 def normalize_entity(body: Any) -> dict[str, Any]:
     body = body if isinstance(body, dict) else {}
+    purpose = body.get("vedtektsfestetFormaal") or body.get("aktivitet")
+    if isinstance(purpose, list):
+        purpose_str = " ".join(str(p).strip() for p in purpose if p).strip()
+    else:
+        purpose_str = str(purpose).strip() if purpose else None
+
     return {
         "organisation_number": body.get("organisasjonsnummer"),
         "name": body.get("navn"),
@@ -167,6 +173,9 @@ def normalize_entity(body: Any) -> dict[str, Any]:
         "business_address": body.get("forretningsadresse"),
         "postal_address": body.get("postadresse"),
         "latest_submitted_accounts": body.get("sisteInnsendteAarsregnskap"),
+        "purpose": purpose_str,
+        "incorporation_date": body.get("stiftelsesdato"),
+        "registration_date": body.get("registreringsdatoEnhetsregisteret"),
     }
 
 

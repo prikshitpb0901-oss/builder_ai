@@ -48,6 +48,13 @@ POSITIVE_COMMERCIAL_MARKERS = [
 ]
 
 
+CMS_TEMPLATE_VENDORS = {
+    "wix", "wixsite", "squarespace", "wordpress", "shopify", "weebly",
+    "webflow", "godaddy", "jimdo", "site123", "duda", "hubspot",
+    "mailchimp", "canva", "strikingly", "joomla", "drupal", "prestashop",
+}
+
+
 def detect_security_threats(text_corpus: str) -> list[str]:
     """Scan text (titles, descriptions, channel bio) for malicious / scam patterns."""
     threats: list[str] = []
@@ -57,6 +64,13 @@ def detect_security_threats(text_corpus: str) -> list[str]:
         match = re.search(pattern, text_lower)
         if match:
             threats.append(f"malicious_pattern:{match.group(0)}")
+
+    # Reject CMS template vendor profiles and search result pages
+    for vendor in CMS_TEMPLATE_VENDORS:
+        if f"/{vendor}" in text_lower or f"@{vendor}" in text_lower or f".{vendor}." in text_lower:
+            threats.append(f"cms_vendor_template_profile:{vendor}")
+    if "/search" in text_lower or "search.php" in text_lower or "?q=" in text_lower or "&q=" in text_lower:
+        threats.append("search_page_not_company_profile")
 
     return threats
 

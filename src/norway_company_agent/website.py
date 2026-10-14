@@ -229,6 +229,24 @@ def structured_social_links(value: Any) -> list[dict[str, str]]:
     return sorted(found.values(), key=lambda item: (item["platform"], item["url"]))
 
 
+CMS_TEMPLATE_HANDLES = {
+    "wix", "wixsite", "squarespace", "wordpress", "shopify", "weebly",
+    "webflow", "godaddy", "jimdo", "site123", "duda", "hubspot",
+    "mailchimp", "canva", "strikingly", "joomla", "drupal", "prestashop",
+    "magento", "bigcommerce", "ghost", "elementor", "bootstrap",
+}
+
+GENERIC_FACEBOOK_PATHS = {
+    "sharer", "sharer.php", "share.php", "dialog", "policy.php", "privacy",
+    "events", "groups", "plugins", "search", "search.php", "results", "find",
+    "explore", "hashtag", "pages", "public", "directory", "help", "login",
+    "recover", "watch", "marketplace", "business", "ads", "about", "policies",
+    "settings", "support", "legal", "terms", "profile.php", "photo", "photos",
+    "video", "videos", "media", "gaming", "fundraisers", "live", "login.php",
+    "notifications", "messages", "bookmarks", "saved", "stories",
+}
+
+
 def normalize_social_url(url: str) -> dict[str, str] | None:
     try:
         parsed = urllib.parse.urlparse(url)
@@ -238,27 +256,57 @@ def normalize_social_url(url: str) -> dict[str, str] | None:
     platform = next((label for domain, label in SOCIAL_HOSTS.items() if host == domain or host.endswith("." + domain)), None)
     if not platform:
         return None
+
+    # Reject URLs containing search queries or sharing parameters
+    if parsed.query:
+        q_low = parsed.query.lower()
+        if any(term in q_low for term in ("q=", "query=", "search=", "keyword=", "share", "sharer")):
+            return None
+
     parts = [part.strip() for part in parsed.path.split("/") if part.strip()]
     lowered = [part.casefold() for part in parts]
+    if not parts:
+        return None
+
+    # Reject CMS builder template handles across all social platforms
+    if any(seg in CMS_TEMPLATE_HANDLES for seg in lowered):
+        return None
+
+    # Reject search/directory segments anywhere in path
+    if any(seg in {"search", "search.php", "results", "find", "explore", "hashtag"} for seg in lowered):
+        return None
+
     rejected_first = {
-        "facebook": {"sharer", "sharer.php", "share.php", "dialog", "policy.php", "privacy", "events", "groups", "plugins"},
-        "instagram": {"p", "reel", "reels", "stories", "explore"},
-        "x": {"intent", "share", "home", "search", "i"},
+        "facebook": GENERIC_FACEBOOK_PATHS | CMS_TEMPLATE_HANDLES,
+        "instagram": {"p", "reel", "reels", "stories", "explore", "accounts", "developer", "about"} | CMS_TEMPLATE_HANDLES,
+        "x": {"intent", "share", "home", "search", "i", "hashtag", "explore"} | CMS_TEMPLATE_HANDLES,
+        "linkedin": {"search", "feed", "in", "jobs", "learning", "pulse", "help"} | CMS_TEMPLATE_HANDLES,
+        "youtube": {"watch", "results", "search", "feed", "trending"} | CMS_TEMPLATE_HANDLES,
+        "tiktok": {"tag", "foryou", "discover", "search"} | CMS_TEMPLATE_HANDLES,
     }
-    if not parts or lowered[0] in rejected_first.get(platform, set()):
+    if lowered[0] in rejected_first.get(platform, set()):
         return None
-    if platform == "facebook" and lowered[0] == "profile.php":
+
+    if platform == "facebook":
+        if any(seg in GENERIC_FACEBOOK_PATHS for seg in lowered):
+            return None
+        if len(parts) > 3:
+            return None
+    if platform == "linkedin" and (lowered[0] != "company" or len(parts) < 2 or lowered[1] in CMS_TEMPLATE_HANDLES):
         return None
-    if platform == "linkedin" and (lowered[0] != "company" or len(parts) < 2):
-        return None
-    if platform == "youtube" and lowered[0] not in {"channel", "user", "c"} and not parts[0].startswith("@"):
-        return None
+    if platform == "youtube":
+        yt_handle = parts[0].removeprefix("@").lower()
+        if yt_handle in CMS_TEMPLATE_HANDLES or (len(parts) >= 2 and lowered[1] in CMS_TEMPLATE_HANDLES):
+            return None
+        if lowered[0] not in {"channel", "user", "c"} and not parts[0].startswith("@"):
+            return None
     if host == "youtu.be":
         return None
     if platform == "tiktok" and not parts[0].startswith("@"):
         return None
     if platform == "x" and len(parts) != 1:
         return None
+
     canonical_host = {
         "linkedin": "linkedin.com",
         "facebook": "facebook.com",
