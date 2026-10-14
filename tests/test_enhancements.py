@@ -239,6 +239,56 @@ class TestEnhancements(unittest.TestCase):
         self.assertIn("62.5% equity ratio", res["financial_status"])
         self.assertTrue(any("equity ratio" in s for s in res["growth_signals"]["supported_signals"]))
 
+    def test_normalize_financials_preserves_most_recent_filings(self):
+        """Test that normalize_financials retains up to 5 most recent filings chronologically."""
+        from norway_company_agent.official import normalize_financials
+        raw_filings = [
+            {"id": i, "regnskapsperiode": {"fraDato": f"202{i}-01-01", "tilDato": f"202{i}-12-31"}, "resultatregnskapResultat": {"aarsresultat": (i - 2) * 100000}}
+            for i in range(6)  # 2020 to 2025
+        ]
+        res = normalize_financials(raw_filings)
+        records = res["records"]
+        self.assertEqual(len(records), 5)
+        self.assertEqual(records[-1]["period"]["tilDato"], "2025-12-31")
+        self.assertEqual(records[-1]["annual_result"], 300000)
+        self.assertEqual(records[0]["period"]["tilDato"], "2021-12-31")
+
+    def test_build_prototype_compact_sorts_financials_latest_first(self):
+        """Test that build_prototype compact() sorts records descending so index 0 is latest filing."""
+        from scripts.build_prototype import compact
+        sample = {
+            "organisation_number": "930856916",
+            "name": "BASE HOME AS",
+            "legal_form": "AS",
+            "employees": 5,
+            "municipality": "OSLO",
+            "industry_code": "41.200",
+            "industry_label": "Bygging av bygninger",
+            "website": "https://example.no",
+            "bankrupt": False,
+            "liquidating": False,
+            "evidence": {
+                "financials": {
+                    "status": "available",
+                    "value": {
+                        "records": [
+                            {"period": {"fraDato": "2023-01-01", "tilDato": "2023-12-31"}, "revenue": 1000000, "annual_result": -754000, "currency": "NOK"},
+                            {"period": {"fraDato": "2024-01-01", "tilDato": "2024-12-31"}, "revenue": 5000000, "annual_result": 200000, "currency": "NOK"},
+                            {"period": {"fraDato": "2025-01-01", "tilDato": "2025-12-31"}, "revenue": 15000000, "annual_result": 10083941, "currency": "NOK"},
+                        ]
+                    }
+                }
+            }
+        }
+        res = compact(sample)
+        records = res["financial"]["records"]
+        self.assertEqual(len(records), 3)
+        # Index 0 must be 2025 with 10M profit, NOT 2023 with 754k loss
+        self.assertEqual(records[0]["period"]["tilDato"], "2025-12-31")
+        self.assertEqual(records[0]["annual_result"], 10083941)
+        self.assertEqual(records[2]["period"]["tilDato"], "2023-12-31")
+        self.assertEqual(records[2]["annual_result"], -754000)
+
 
 if __name__ == "__main__":
     unittest.main()

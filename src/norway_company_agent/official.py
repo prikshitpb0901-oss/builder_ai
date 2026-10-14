@@ -76,7 +76,7 @@ def normalize_financials(body: Any) -> dict[str, Any]:
     if not records:
         return {"records": []}
     normalized = []
-    for item in records[:3]:
+    for item in records:
         normalized.append({
             "record_id": item.get("id"),
             "account_type": item.get("regnskapstype"),
@@ -90,7 +90,16 @@ def normalize_financials(body: Any) -> dict[str, Any]:
             "equity": _get(item, "egenkapitalGjeld", "egenkapital", "sumEgenkapital"),
             "debt": _get(item, "egenkapitalGjeld", "gjeldOversikt", "sumGjeld"),
         })
-    return {"records": normalized}
+
+    def _period_end(r: dict[str, Any]) -> str:
+        p = r.get("period")
+        if isinstance(p, dict):
+            return str(p.get("tilDato") or "")
+        return str(p or "")
+
+    sorted_records = sorted(normalized, key=_period_end)
+    return {"records": sorted_records[-5:]}
+
 
 
 def normalize_financial_history(body: Any, org: str) -> dict[str, Any]:
