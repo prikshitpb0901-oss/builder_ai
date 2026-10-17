@@ -289,6 +289,43 @@ class TestEnhancements(unittest.TestCase):
         self.assertEqual(records[2]["period"]["tilDato"], "2023-12-31")
         self.assertEqual(records[2]["annual_result"], -754000)
 
+    def test_prototype_html_includes_company_comparison_view(self):
+        """Test that prototype build generates side-by-side comparison view and controls."""
+        from scripts.build_prototype import build
+        html_output = build([], {})
+        self.assertIn('id="compare-view"', html_output)
+        self.assertIn('id="compare-btn"', html_output)
+        self.assertIn('id="close-compare-btn"', html_output)
+        self.assertIn('id="compare-table-container"', html_output)
+        self.assertIn('latest_revenue', html_output)
+        self.assertIn('data-metric=', html_output)
+
+    def test_financial_synthesis_distinguishes_operating_loss(self):
+        """Test that financial synthesis explicitly labels operating loss and net profit without contradiction."""
+        sample = {
+            "name": "TEST AS",
+            "organisation_number": "985589003",
+            "evidence": {
+                "financials": {
+                    "status": "available",
+                    "value": {
+                        "records": [
+                            {
+                                "period": {"fraDato": "2024-01-01", "tilDato": "2024-12-31"},
+                                "revenue": 4000000,
+                                "operating_result": -120000,
+                                "annual_result": 5000,
+                                "currency": "NOK",
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        res = synthesize_company_profile(sample)
+        self.assertIn("operating loss", res["financial_status"])
+        self.assertIn("Net margin:", res["financial_status"])
+
 
 if __name__ == "__main__":
     unittest.main()

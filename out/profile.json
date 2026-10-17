@@ -2315,28 +2315,11 @@
       }
     ],
     "sentiment": {
-      "status": "available",
-      "label": "neutral",
-      "accepted_items": 7,
-      "rejected_items": 0,
-      "label_counts": {
-        "neutral": 7
-      },
-      "independent_source_ids": [
-        "endospheres.com",
-        "facebook.com",
-        "fjellglod.no"
-      ],
-      "source_urls": [
-        "https://www.endospheres.com/en/treatments-results-before-after/",
-        "https://www.facebook.com/events/1440406971478146?active_tab=about",
-        "https://www.fjellglod.no",
-        "https://www.fjellglod.no/blogs/news/endospheres",
-        "https://www.fjellglod.no/blogs/news/face-formula-den-nye-generasjonen-hudpleie",
-        "https://www.fjellglod.no/blogs/news/fjellglod-face-formula-pro-age-forsta-huden-gjennom-alle-livets-faser",
-        "https://www.fjellglod.no/blogs/news/mot-orjan-dyptgaende-massasje-hos-fjellglod-pa-geilo"
-      ],
-      "warning": "Contextual dated signal, not a timeless fact about the company."
+      "status": "abstain",
+      "label": null,
+      "accepted_items": 0,
+      "rejected_items": 7,
+      "reason": "At least two independently sourced, exact-entity items with verified star ratings or audited model receipts are required."
     },
     "jobs": [],
     "hiring_signals": [],
@@ -67100,33 +67083,11 @@
       }
     ],
     "sentiment": {
-      "status": "available",
-      "label": "neutral",
-      "accepted_items": 13,
-      "rejected_items": 0,
-      "label_counts": {
-        "neutral": 13
-      },
-      "independent_source_ids": [
-        "asker.com",
-        "news.google.com"
-      ],
-      "source_urls": [
-        "https://news.google.com/rss/articles/CBMiakFVX3lxTE00LVZMXzdQTW9UZEp3R0dNRXUtVUZYZEg5bmlCR1R6OHB3V1c0QnFtcnJjSmlyUm1KcllkS3l1Vi14Qzl3WFVnamhnbTZJT2dIQTBjNlVsV3J6QlhWNkJfbGlud0dIbnUzRkE?oc=5",
-        "https://news.google.com/rss/articles/CBMigAFBVV95cUxOelhLN3FVZVlOVzNhM19tQVhUd0Y5RTltRm54UlQtT052el9MV2RYbW9vRXQwMWJuYWRZcExfelp3TGVfdW9vWmxDWFFoblp1OXhuY19iX1lEbWZZc2FuR1JtMHA5TzdkNElIZTJ2OEhPUHZTZFhBMXU1eE9PTUZ1OQ?oc=5",
-        "https://news.google.com/rss/articles/CBMikgFBVV95cUxQUjJQNHBkTGtlRnYxcTR6amY0RWsteUxvdkpIemNhQW04aThXZlh6NURFN3pFaXE1ZFRyYWxJelZoaDh4Y0Ztd3FHZlRoQ3lCUFJfQ3dmVVo4YnFoTGwxSU82ekRNTEVuZFdPeFVMb0hIY29icTMxT1ZsbUlwUnVsZ09YQ01HbjRjYVYyd3JiVHNXUQ?oc=5",
-        "https://news.google.com/rss/articles/CBMikwFBVV95cUxPY2xVZVBueTNpSTBEZFJlbmFDZTdwcE5tWVNnSURmaHptZ0pMQkpVSFV6cHBOTGZmUzlvYllGWDJwSEtFSTR0MThidDhUSVVOdE1qaFJjaGdzN2lfSHh3SmpYemtEclBNeXdaWGxmVkZqbm5qY0NpTndpd1ZKQlh5UEwzZzJxbmo5NzNmcDZNMFlSRk0?oc=5",
-        "https://news.google.com/rss/articles/CBMiqwFBVV95cUxOeHVQSzh5bmxsT1JBa3Vsd29yb3FPVWltSll5NWNRS1l4TDhTSk1Ca1V5V3F2RzJ3WjFrVE9uY01UZUZ4enNBbW83OGJFaDR4dkZNSXRBNG9VeUcyRkMtUkNkOGdxeDVJVnJwM01STWoyMlFvZGw1M1dRQWxXNVdKS0JOejViaHdJSG9EbEhidDlwOWNra2ZUOHlZR2lEV1pneUUwb0p4eXJDT00?oc=5",
-        "https://www.asker.com/cdn-cgi/l/email-protection#40252d2d216e322825222f32270021332b25326e232f2d",
-        "https://www.asker.com/cdn-cgi/l/email-protection#c9aca4a4a8e7bba1acaba6bbae89a8baa2acbbe7aaa6a4",
-        "https://www.asker.com/investors-and-media/",
-        "https://www.asker.com/investors-and-media/press-releases-and-news/2026/acquisition-of-ambercell-solutions/",
-        "https://www.asker.com/investors-and-media/press-releases-and-news/2026/acquisition-of-labo-clinic/",
-        "https://www.asker.com/investors-and-media/press-releases-and-news/2026/acquisition-of-med-kjemi/",
-        "https://www.asker.com/investors-and-media/press-releases-and-news/2026/asker-healthcare-groups-nomination-committee-for-the-annual-general-meeting-2027/",
-        "https://www.asker.com/investors-and-media/press-releases-and-news/2026/interim-report-1-january30-june-2026/"
-      ],
-      "warning": "Contextual dated signal, not a timeless fact about the company."
+      "status": "abstain",
+      "label": null,
+      "accepted_items": 0,
+      "rejected_items": 13,
+      "reason": "At least two independently sourced, exact-entity items with verified star ratings or audited model receipts are required."
     },
     "jobs": [
       {

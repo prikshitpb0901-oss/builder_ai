@@ -36,9 +36,13 @@ def _claim(label: str, value: Any, record: dict[str, Any], classification: str) 
 
 
 def _record_end_date(rec: dict[str, Any]) -> str:
+    if not isinstance(rec, dict):
+        return ""
     period = rec.get("period")
     if isinstance(period, dict):
-        return str(period.get("tilDato") or "")
+        return str(period.get("tilDato") or period.get("fraDato") or "")
+    if isinstance(period, str):
+        return period
     return str(period or "")
 
 
@@ -329,9 +333,15 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
         debt = latest.get("debt")
         period_raw = latest.get("period")
         if isinstance(period_raw, dict):
-            fra = period_raw.get("fraDato", "")
-            til = period_raw.get("tilDato", "")
-            period = f"{til[:4]} ({fra} to {til})" if fra and til else str(period_raw)
+            fra = str(period_raw.get("fraDato") or "")
+            til = str(period_raw.get("tilDato") or "")
+            year = til[:4] if len(til) >= 4 else (fra[:4] if len(fra) >= 4 else "")
+            if fra and til:
+                period = f"{year} ({fra} to {til})"
+            elif til:
+                period = f"{year} (ending {til})"
+            else:
+                period = str(period_raw)
         else:
             period = str(period_raw or "latest period")
         try:
@@ -347,13 +357,32 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
         fin_parts = []
         if rev_num is not None and profit_num is not None:
             fin_parts.append(f"Reported {period} financial results: revenue {rev_num:,.0f} {curr} and annual result {profit_num:,.0f} {curr}.")
+            if op_num is not None and rev_num > 0:
+                op_margin = (op_num / rev_num) * 100.0
+                if op_num >= 0:
+                    fin_parts.append(f"Operating profit margin: {op_margin:.1f}%.")
+                else:
+                    fin_parts.append(f"Operating margin: {op_margin:.1f}% (operating loss).")
             if rev_num > 0:
-                margin = (profit_num / rev_num) * 100.0
-                fin_parts.append(f"Operating profit margin: {margin:.1f}%.")
-                if margin >= 15.0:
-                    supported_growth_items.append(f"High profitability with {margin:.1f}% net margin")
+                net_margin = (profit_num / rev_num) * 100.0
+                if profit_num < 0:
+                    fin_parts.append(f"Net margin: {net_margin:.1f}% (net loss).")
+                else:
+                    fin_parts.append(f"Net margin: {net_margin:.1f}%.")
+                if net_margin >= 15.0 and profit_num > 0:
+                    supported_growth_items.append(f"High profitability with {net_margin:.1f}% net margin")
         elif rev_num is not None:
             fin_parts.append(f"Reported {period} revenue: {rev_num:,.0f} {curr}.")
+            if op_num is not None and rev_num > 0:
+                op_margin = (op_num / rev_num) * 100.0
+                if op_num >= 0:
+                    fin_parts.append(f"Operating profit margin: {op_margin:.1f}%.")
+                else:
+                    fin_parts.append(f"Operating margin: {op_margin:.1f}% (operating loss).")
+        elif profit_num is not None:
+            fin_parts.append(f"Reported {period} annual result: {profit_num:,.0f} {curr}.")
+            if op_num is not None:
+                fin_parts.append(f"Operating result: {op_num:,.0f} {curr}.")
         else:
             fin_parts.append(f"Annual accounts filed for period {period}.")
 
@@ -366,7 +395,7 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
             else:
                 solv_str += "."
             fin_parts.append(solv_str)
-            if eq_ratio >= 40.0:
+            if eq_ratio >= 40.0 and equity_num > 0:
                 supported_growth_items.append(f"Robust balance sheet solvency with {eq_ratio:.1f}% equity ratio")
 
         # Multi-year revenue trend if prior account year available
@@ -378,9 +407,16 @@ def synthesize_company_profile(profile: dict[str, Any]) -> dict[str, Any]:
                 prior_rev = None
             if prior_rev is not None and prior_rev > 0:
                 growth = ((rev_num - prior_rev) / prior_rev) * 100.0
-                prior_year = str(prior.get("period", {}).get("tilDato", ""))[:4] if isinstance(prior.get("period"), dict) else "prior period"
+                if isinstance(prior.get("period"), dict):
+                    prior_year = str(prior.get("period", {}).get("tilDato") or prior.get("period", {}).get("fraDato") or "")[:4]
+                elif prior.get("period"):
+                    prior_year = str(prior.get("period"))[:4]
+                else:
+                    prior_year = "prior period"
+                if not prior_year:
+                    prior_year = "prior period"
                 fin_parts.append(f"Multi-year revenue trend: {growth:+.1f}% YoY vs {prior_year}.")
-                if growth > 0:
+                if growth > 0 and rev_num > prior_rev:
                     supported_growth_items.append(f"Revenue grew {growth:+.1f}% YoY ({prior_rev:,.0f} -> {rev_num:,.0f} {curr}) per statutory filing")
 
         financial_status = " ".join(fin_parts)

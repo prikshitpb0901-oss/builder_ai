@@ -639,25 +639,6 @@ def main() -> None:
                     note=f"{len(editorial_news)} verified editorial news mention(s)",
                 )
                 profile["evidence"]["news"] = profile["evidence"]["dated_news"]
-                # Verified Sentiment Integrity
-                sentiment_items = [
-                    {
-                        "id": m["id"],
-                        "organisation_number": profile["organisation_number"],
-                        "exact_entity": True,
-                        "source_class": "public_news",
-                        "source_url": m["source_url"],
-                        "retrieved_at": m["retrieved_at"],
-                        "evidence_span": m["text"],
-                        "content_sha256": hashlib.sha256(m["text"].encode()).hexdigest(),
-                        "text": m["text"],
-                        "label": "positive" if any(w in m["text"].lower() for w in ("vekst", "rekord", "overskudd", "kontrakt", "ansetter", "tildelt"))
-                                 else "negative" if any(w in m["text"].lower() for w in ("konkurs", "underskudd", "oppsigelse", "fall", "tap", "rettssak"))
-                                 else "neutral",
-                    }
-                    for m in editorial_news
-                ]
-                profile["sentiment"] = aggregate_company_sentiment(sentiment_items)
             else:
                 profile["evidence"]["dated_news"] = evidence(
                     "dated_news",
@@ -667,7 +648,30 @@ def main() -> None:
                     note="No verified entity mentions discovered in monitored editorial sources",
                 )
                 profile["evidence"]["news"] = profile["evidence"]["dated_news"]
-                profile["sentiment"] = aggregate_company_sentiment([])
+
+            # Verified Sentiment Integrity:
+            # Strictly fail closed (status="abstain", label=None) unless backed by
+            # verified Google Maps star ratings (explicit_star_rating_v1) or an audited
+            # sentiment model receipt. News keyword heuristics without model receipts
+            # must never emit status="available" with a sentiment label.
+            candidate_sentiment_items = profile.get("sentiment_items") or []
+            verified_sentiment_items = [
+                item for item in candidate_sentiment_items
+                if isinstance(item, dict) and (
+                    item.get("sentiment_model_version") == "explicit_star_rating_v1"
+                    or (item.get("model_id") and item.get("model_revision"))
+                )
+            ]
+            if len(verified_sentiment_items) >= 2:
+                profile["sentiment"] = aggregate_company_sentiment(verified_sentiment_items)
+            else:
+                profile["sentiment"] = {
+                    "status": "abstain",
+                    "label": None,
+                    "accepted_items": len(verified_sentiment_items),
+                    "rejected_items": len(candidate_sentiment_items) + len(editorial_news),
+                    "reason": "At least two independently sourced, exact-entity items with verified star ratings or audited model receipts are required.",
+                }
 
             # External Footprint Connectors (LinkedIn, YouTube, Reviews, Jobs)
             website_domain = website_val.get("registered_domain")

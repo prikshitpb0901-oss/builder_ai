@@ -723,7 +723,7 @@
     "changes": [],
     "summary": {
       "what_the_company_does": "ARKITEKTFIRMA JON VIKØREN AS (985589003) is a registered Norwegian AS operating in Arkitektvirksomhet, based in VIK. Incorporated on 2003-02-05. Statutory business purpose: 'Yta rådgjevande arkitektfaglege tenester. Selskapet kan også gjennom aksjekjøp eller på andre måtar engasjera seg i andre føretak uansett føremål og selskapsform.' per Brønnøysundregistrene.",
-      "financial_status": "Reported 2025 (2025-01-01 to 2025-12-31) financial results: revenue 4,182,614 NOK and annual result 4,672 NOK. Operating profit margin: 0.1%. Balance sheet: total assets 4,587,133 NOK, equity 3,145,242 NOK (68.6% equity ratio), total liabilities 1,441,891 NOK. Multi-year revenue trend: -10.6% YoY vs 2024.",
+      "financial_status": "Reported 2025 (2025-01-01 to 2025-12-31) financial results: revenue 4,182,614 NOK and annual result 4,672 NOK. Operating margin: -3.0% (operating loss). Net margin: 0.1%. Balance sheet: total assets 4,587,133 NOK, equity 3,145,242 NOK (68.6% equity ratio), total liabilities 1,441,891 NOK. Multi-year revenue trend: -10.6% YoY vs 2024.",
       "leadership_status": "4 active registered role holder(s) on file in Brreg. Daglig leder: Lin Marie Vikøren. Styreleder: Lin Marie Vikøren. Latest registered governance update: 2026-08-19.",
       "growth_signals": {
         "supported_signals": [
@@ -94147,31 +94147,11 @@
       }
     ],
     "sentiment": {
-      "status": "available",
-      "label": "neutral",
-      "accepted_items": 11,
-      "rejected_items": 0,
-      "label_counts": {
-        "neutral": 11
-      },
-      "independent_source_ids": [
-        "news.google.com",
-        "ramme.no"
-      ],
-      "source_urls": [
-        "https://news.google.com/rss/articles/CBMiW0FVX3lxTFBtNzdaR05odWdvUXV1NkI4Vl8wYklvclV2cFRnT3hhTlNwbjVjVnJHS3ZMbDI5ZjBmRnVITkxqMi05Vm4tYkNSTC1KX2VNU2RRMTNFVThPVHFDSUk?oc=5",
-        "https://news.google.com/rss/articles/CBMicEFVX3lxTE00WkN4UGNFWDdXQWNsSHl2NjlZR3J6S2FJc2xxNEtDWV83MTFJUFdnbTk1eVgxZ3M4bVFhcDU0WHRfTVV2NUJ5U0V5N0dVOVdrTndFMndGVXBqdVh6dlFTU1cxZEp2aWItSXR4TThLU2I?oc=5",
-        "https://news.google.com/rss/articles/CBMickFVX3lxTE1Qa2c3RlAwWkZpM2dwdl9nc0hXa055XzRhSmkzdnpDQXp5clFCbGVVUXBJTHF1VEVNNFJrWWU1ZlVIZm5TSi1IUl84Wi1JcVkzdGgwbUs4SWtLVnBfTjNKRHFEM3FyNjc0ZUhnUUNRaGtUZw?oc=5",
-        "https://news.google.com/rss/articles/CBMid0FVX3lxTE4wYlppd2dEMDR3RXlJVUl2cVhsa3FhMElPMGExR042T0c5VkhLWm95ajY1aWpOdWZUT3JiN3hrci0yNnNLbC1nbHNvZm5TNUpfbDNobkV0Qk1XZ3ZfaF9QS1NCbUtoNFdWd0FtbHBmSnZ1RUpkZW1J?oc=5",
-        "https://news.google.com/rss/articles/CBMihgFBVV95cUxPOUZ1WkR6bFVjb2FNcFRMekpRckFoQURrU0plWHlVc0w3anNKcFM0eHpURGJ1OTI2MTlBSU9nNUJUc0dPcnFQbDQ4WkhzOUdVem9zQ2ZiMDdQX3U3LW16V3RQWmY5NXRob3EyU2Y5dkx4RklJZkZNOXBxMkN0a3JoVjc0X2ZOZw?oc=5",
-        "https://ramme.no/aktiviteter-2026/",
-        "https://ramme.no/all-onboard-aktiviteter/",
-        "https://ramme.no/forrader-et-spill-pa-liv-og-dod/",
-        "https://ramme.no/jul-og-nyttar-pa-ramme/",
-        "https://ramme.no/meld-deg-pa-nyhetsbrev/",
-        "https://ramme.no/mysteriet-pa-ramme/"
-      ],
-      "warning": "Contextual dated signal, not a timeless fact about the company."
+      "status": "abstain",
+      "label": null,
+      "accepted_items": 0,
+      "rejected_items": 11,
+      "reason": "At least two independently sourced, exact-entity items with verified star ratings or audited model receipts are required."
     },
     "jobs": [
       {
